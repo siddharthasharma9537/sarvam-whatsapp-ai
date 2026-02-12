@@ -1,19 +1,25 @@
 from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
 import requests
-import os
 
 app = FastAPI()
 
 VERIFY_TOKEN = "siddharth_verify_token"
-WHATSAPP_TOKEN = "EAANWTaYRRcwBQtQG2oE838dyJPuz8PfWD1OyVrhagJNsJhi1xZCikngn7lmYaXgDI7P6tJvtOp2N3vg3y319Kl6ekWQeL3UNTb5DPI2ZCpjCuZAzMRHjJuKjGYz34lgRpDWJ8XIeQs32QjsDd4F025YVZCwxhUX2bMB9fwNxv2uHyz9dyLm04oule17iZA3b3SDaftGj5RKJhefWZBsaFZA0tQkrOdcn7CBZCXYJeZCxatNZCNB0YDk6oLilZBOgZCZAGY8Mo27KzpegtVuOpHnZB5Ne2ZBi2hb"
+WHATSAPP_TOKEN = "EAANWTaYRRcwBQjvVtGxkWtKTOEs71luiHYFO9fI0sEQFTTQ2LaG7K7UgTVwY7fkrrjmCen7LsJtwxkR9B6f6hXRr9gmCfOh1L9rWJaL3uHte2JLtZCZBcPRXkyrRZCt1Ek1ZCsyfsLzDFkkycdCa0tCMiez71qsNQatuGWtu0LmC46ff9AgSLdu5ODeIM7WB76BaZApLC62FKVx7K3YZAQSsaPW9cHJ9b58togZA9RT8pz7nGIrrrUolGxzwDKIZCwmguMTT1XlTJr0ZAmQ58k8EBqx6u"
 PHONE_NUMBER_ID = "1005546725973223"
-SARVAM_API_KEY = "sk_hd62veik_OvDhMIJXYoUfTPSa5DSdRJVj"
+
 
 @app.get("/webhook")
-async def verify(mode: str = None, challenge: str = None, verify_token: str = None):
-    if verify_token == VERIFY_TOKEN:
-        return int(challenge)
-    return "Verification failed"
+async def verify(request: Request):
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return PlainTextResponse(challenge)
+
+    return PlainTextResponse("Verification failed", status_code=403)
+
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -23,17 +29,15 @@ async def webhook(request: Request):
         message = data["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"]
         sender = data["entry"][0]["changes"][0]["value"]["messages"][0]["from"]
 
-        reply = generate_reply(message)
+        reply = f"You said: {message}"
 
         send_whatsapp(sender, reply)
 
-    except:
-        pass
+    except Exception as e:
+        print(e)
 
     return {"status": "ok"}
 
-def generate_reply(text):
-    return f"You said: {text}"
 
 def send_whatsapp(to, message):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
