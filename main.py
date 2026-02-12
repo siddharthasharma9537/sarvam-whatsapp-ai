@@ -128,7 +128,12 @@ def send_menu(to):
 
     print("Sending menu to", to)
 
-    headers = get_headers()
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
     data = {
         "messaging_product": "whatsapp",
@@ -137,41 +142,39 @@ def send_menu(to):
         "interactive": {
             "type": "button",
             "body": {
-                "text":
-                "🙏 Namaskaram!\n\n"
-                "Sri Parvathi Jadala Ramalingeshwara Swamy Devasthanam\n\n"
-                "Please select an option:"
+                "text": "🙏 Namaskaram!\n\nSri Parvathi Jadala Ramalingeshwara Swamy Devasthanam Assistant\n\nPlease choose:"
             },
             "action": {
                 "buttons": [
-
                     {
                         "type": "reply",
-                        "reply": {"id": "timings", "title": "Temple Timings"}
+                        "reply": {
+                            "id": "timings",
+                            "title": "Temple Timings"
+                        }
                     },
-
                     {
                         "type": "reply",
-                        "reply": {"id": "location", "title": "Location"}
+                        "reply": {
+                            "id": "location",
+                            "title": "Temple Location"
+                        }
                     },
-
                     {
                         "type": "reply",
-                        "reply": {"id": "giripradakshina", "title": "Giripradakshina"}
-                    },
-
-                    {
-                        "type": "reply",
-                        "reply": {"id": "register", "title": "Register"}
+                        "reply": {
+                            "id": "register",
+                            "title": "Register Devotee"
+                        }
                     }
-
                 ]
             }
         }
     }
 
-    requests.post(GRAPH_URL, headers=headers, json=data)
+    r = requests.post(url, headers=headers, json=data)
 
+    print("Menu response:", r.status_code, r.text)
 
 # =====================================
 # BUTTON HANDLER
