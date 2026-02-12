@@ -1,14 +1,13 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 import requests
-import base64
 import os
 
 app = FastAPI()
 
-# =========================
+# =====================================
 # CONFIG
-# =========================
+# =====================================
 
 VERIFY_TOKEN = "siddharth_verify_token"
 
@@ -18,14 +17,15 @@ PHONE_NUMBER_ID = "1005546725973223"
 
 SARVAM_API_KEY = "sk_hd62veik_OvDhMIJXYoUfTPSa5DSdRJVj"
 
+GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-# Devotee database (temporary memory)
+
+# Temporary memory database
 devotees = {}
 
-
-# =========================
+# =====================================
 # WEBHOOK VERIFY
-# =========================
+# =====================================
 
 @app.get("/webhook")
 async def verify(request: Request):
@@ -34,48 +34,65 @@ async def verify(request: Request):
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
 
+    print("Webhook verification requested")
+
     if mode == "subscribe" and token == VERIFY_TOKEN:
+        print("Webhook verified successfully")
         return PlainTextResponse(challenge)
 
     return PlainTextResponse("Verification failed", status_code=403)
 
 
-# =========================
+# =====================================
 # MAIN WEBHOOK
-# =========================
+# =====================================
 
 @app.post("/webhook")
 async def webhook(request: Request):
 
     data = await request.json()
 
+    print("Incoming webhook:", data)
+
     try:
 
         value = data["entry"][0]["changes"][0]["value"]
+
+        if "messages" not in value:
+            return {"status": "no message"}
+
         message_obj = value["messages"][0]
 
         sender = message_obj["from"]
         msg_type = message_obj["type"]
+
+        print(f"Message from {sender} type {msg_type}")
 
         # TEXT MESSAGE
         if msg_type == "text":
 
             message = message_obj["text"]["body"].lower()
 
+            print("Text:", message)
+
             if message in ["hi", "hello", "namaskaram", "menu", "start"]:
                 send_menu(sender)
+                return {"status": "menu sent"}
 
-            elif message.startswith("register"):
+            if message.startswith("register"):
                 register_devotee(sender, message)
+                return {"status": "registered"}
 
-            else:
-                reply = sarvam_reply(message)
-                send_whatsapp(sender, reply)
+            reply = sarvam_reply(message)
+
+            send_whatsapp(sender, reply)
 
         # BUTTON CLICK
         elif msg_type == "interactive":
 
             button_id = message_obj["interactive"]["button_reply"]["id"]
+
+            print("Button clicked:", button_id)
 
             reply = handle_button(button_id)
 
@@ -86,30 +103,32 @@ async def webhook(request: Request):
 
             media_id = message_obj["audio"]["id"]
 
+            print("Audio received:", media_id)
+
             transcript = speech_to_text(media_id)
+
+            print("Transcript:", transcript)
 
             reply = sarvam_reply(transcript)
 
             send_whatsapp(sender, reply)
 
     except Exception as e:
-        print("Error:", e)
+
+        print("Webhook error:", e)
 
     return {"status": "ok"}
 
 
-# =========================
-# MENU
-# =========================
+# =====================================
+# SEND MENU
+# =====================================
 
 def send_menu(to):
 
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    print("Sending menu to", to)
 
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = get_headers()
 
     data = {
         "messaging_product": "whatsapp",
@@ -118,72 +137,90 @@ def send_menu(to):
         "interactive": {
             "type": "button",
             "body": {
-                "text": "🙏 Namaskaram!\n\nSri Parvathi Jadala Ramalingeshwara Swamy Devasthanam Assistant\n\nPlease choose:"
+                "text":
+                "🙏 Namaskaram!\n\n"
+                "Sri Parvathi Jadala Ramalingeshwara Swamy Devasthanam\n\n"
+                "Please select an option:"
             },
             "action": {
                 "buttons": [
-                    {"type": "reply", "reply": {"id": "timings", "title": "Temple Timings"}},
-                    {"type": "reply", "reply": {"id": "location", "title": "Temple Location"}},
-                    {"type": "reply", "reply": {"id": "giripradakshina", "title": "Giripradakshina"}},
-                    {"type": "reply", "reply": {"id": "register", "title": "Register Devotee"}}
+
+                    {
+                        "type": "reply",
+                        "reply": {"id": "timings", "title": "Temple Timings"}
+                    },
+
+                    {
+                        "type": "reply",
+                        "reply": {"id": "location", "title": "Location"}
+                    },
+
+                    {
+                        "type": "reply",
+                        "reply": {"id": "giripradakshina", "title": "Giripradakshina"}
+                    },
+
+                    {
+                        "type": "reply",
+                        "reply": {"id": "register", "title": "Register"}
+                    }
+
                 ]
             }
         }
     }
 
-    requests.post(url, headers=headers, json=data)
+    requests.post(GRAPH_URL, headers=headers, json=data)
 
 
-# =========================
+# =====================================
 # BUTTON HANDLER
-# =========================
+# =====================================
 
-def handle_button(button_id):
+def handle_button(button):
 
-    if button_id == "timings":
+    if button == "timings":
 
-        return """🕉 Temple timings:
+        return (
+            "🕉 Temple timings:\n\n"
+            "Morning: 5:00 AM – 12:30 PM\n"
+            "Evening: 3:00 PM – 7:00 PM\n\n"
+            "Monday & Friday:\n"
+            "Morning till 1:00 PM\n"
+            "Evening till 7:30 PM"
+        )
 
-Morning: 5:00 AM – 12:30 PM
-Evening: 3:00 PM – 7:00 PM
+    if button == "location":
 
-Monday & Friday:
-Morning: till 1:00 PM
-Evening: till 7:30 PM"""
+        return (
+            "📍 Temple Location:\n\n"
+            "Cheruvugattu, Nalgonda\n\n"
+            "https://maps.google.com/?q=17.17491,79.21219"
+        )
 
+    if button == "giripradakshina":
 
-    if button_id == "location":
+        return (
+            "🚶 Giripradakshina:\n\n"
+            "Sacred pradakshina around hill.\n"
+            "Very powerful spiritual practice."
+        )
 
-        return """📍 Temple location:
+    if button == "register":
 
-Cheruvugattu, Nalgonda District
+        return (
+            "Please type:\n\n"
+            "register YourName YourVillage\n\n"
+            "Example:\n"
+            "register Siddharth Nalgonda"
+        )
 
-Google Maps:
-https://maps.google.com/?q=17.17491,79.21219"""
-
-
-    if button_id == "giripradakshina":
-
-        return """🚶 Giripradakshina:
-
-Sacred pradakshina around Cheruvugattu hill.
-
-Performed especially during Maha Shivaratri."""
-
-
-    if button_id == "register":
-
-        return """Please type:
-
-register YourName YourVillage
-
-Example:
-register Siddharth Nalgonda"""
+    return "Please select menu option."
 
 
-# =========================
+# =====================================
 # REGISTER DEVOTEE
-# =========================
+# =====================================
 
 def register_devotee(phone, message):
 
@@ -199,18 +236,23 @@ def register_devotee(phone, message):
             "village": village
         }
 
-        send_whatsapp(phone, f"🙏 Registration successful.\nWelcome {name} from {village}.")
+        send_whatsapp(
+            phone,
+            f"🙏 Registration successful\n\nWelcome {name} from {village}"
+        )
 
     else:
 
-        send_whatsapp(phone, "Invalid format.\nType: register Name Village")
+        send_whatsapp(phone, "Invalid format.\nUse: register Name Village")
 
 
-# =========================
-# SARVAM AI
-# =========================
+# =====================================
+# SARVAM AI CHAT
+# =====================================
 
 def sarvam_reply(user_message):
+
+    print("Sarvam processing:", user_message)
 
     url = "https://api.sarvam.ai/v1/chat/completions"
 
@@ -222,68 +264,77 @@ def sarvam_reply(user_message):
     data = {
         "model": "sarvam-m",
         "messages": [
+
             {
                 "role": "system",
-                "content": """You are temple assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Devasthanam.
-
-Reply Telugu or English based on user."""
+                "content":
+                "You are assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple."
             },
+
             {
                 "role": "user",
                 "content": user_message
             }
+
         ]
     }
 
-    response = requests.post(url, headers=headers, json=data)
+    try:
 
-    if response.status_code == 200:
+        response = requests.post(url, headers=headers, json=data)
 
-        return response.json()["choices"][0]["message"]["content"]
+        result = response.json()
 
-    return "క్షమించండి. Please try again."
+        print("Sarvam response:", result)
+
+        return result["choices"][0]["message"]["content"]
+
+    except Exception as e:
+
+        print("Sarvam error:", e)
+
+        return "Please try again."
 
 
-# =========================
+# =====================================
 # SPEECH TO TEXT
-# =========================
+# =====================================
 
 def speech_to_text(media_id):
 
-    url = f"https://graph.facebook.com/v18.0/{media_id}"
+    print("Downloading audio")
 
     headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
 
-    res = requests.get(url, headers=headers).json()
+    media = requests.get(
+        f"https://graph.facebook.com/v18.0/{media_id}",
+        headers=headers
+    ).json()
 
-    audio_url = res["url"]
+    audio_url = media["url"]
 
-    audio_data = requests.get(audio_url, headers=headers).content
+    audio = requests.get(audio_url, headers=headers).content
 
-    # send to Sarvam speech endpoint
     stt_url = "https://api.sarvam.ai/v1/speech-to-text"
 
-    files = {"file": audio_data}
+    files = {"file": audio}
 
     headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
 
-    response = requests.post(stt_url, headers=headers, files=files)
+    res = requests.post(stt_url, headers=headers, files=files)
 
-    return response.json()["text"]
+    return res.json()["text"]
 
 
-# =========================
-# SEND WHATSAPP TEXT
-# =========================
+# =====================================
+# SEND WHATSAPP MESSAGE
+# =====================================
 
 def send_whatsapp(to, message):
 
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+    print("Sending message:", message)
 
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = get_headers()
 
     data = {
         "messaging_product": "whatsapp",
@@ -292,12 +343,24 @@ def send_whatsapp(to, message):
         "text": {"body": message}
     }
 
-    requests.post(url, headers=headers, json=data)
+    requests.post(GRAPH_URL, headers=headers, json=data)
 
 
-# =========================
-# BROADCAST ANNOUNCEMENT
-# =========================
+# =====================================
+# HEADERS
+# =====================================
+
+def get_headers():
+
+    return {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+
+# =====================================
+# BROADCAST
+# =====================================
 
 def broadcast(message):
 
