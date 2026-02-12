@@ -23,6 +23,7 @@ GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 # Temporary memory database
 devotees = {}
 
+
 # =====================================
 # WEBHOOK VERIFY
 # =====================================
@@ -50,11 +51,11 @@ async def verify(request: Request):
 @app.post("/webhook")
 async def webhook(request: Request):
 
-    data = await request.json()
-
-    print("Incoming webhook:", data)
-
     try:
+
+        data = await request.json()
+
+        print("Incoming webhook:", data)
 
         value = data["entry"][0]["changes"][0]["value"]
 
@@ -68,7 +69,10 @@ async def webhook(request: Request):
 
         print(f"Message from {sender} type {msg_type}")
 
+        # =====================================
         # TEXT MESSAGE
+        # =====================================
+
         if msg_type == "text":
 
             message = message_obj["text"]["body"].lower()
@@ -87,7 +91,13 @@ async def webhook(request: Request):
 
             send_whatsapp(sender, reply)
 
+            return {"status": "text processed"}
+
+
+        # =====================================
         # BUTTON CLICK
+        # =====================================
+
         elif msg_type == "interactive":
 
             button_id = message_obj["interactive"]["button_reply"]["id"]
@@ -98,28 +108,53 @@ async def webhook(request: Request):
 
             send_whatsapp(sender, reply)
 
+            return {"status": "button processed"}
+
+
+        # =====================================
         # VOICE MESSAGE
-elif msg_type == "audio":
+        # =====================================
 
-    media_id = message_obj["audio"]["id"]
+        elif msg_type == "audio":
 
-    print("Audio received:", media_id)
+            media_id = message_obj["audio"]["id"]
 
-    transcript = speech_to_text(media_id)
+            print("Audio received:", media_id)
 
-    print("Transcript:", transcript)
+            transcript = speech_to_text(media_id)
 
-    if transcript and transcript.strip() != "":
-        reply = sarvam_reply(transcript)
-    else:
-        reply = "క్షమించండి. Voice message clear ga ardham kaaledu. Please try again."
+            print("Transcript:", transcript)
 
-    send_whatsapp(sender, reply)
+            if transcript and transcript.strip() != "":
+                reply = sarvam_reply(transcript)
+            else:
+                reply = "క్షమించండి. Voice message clear ga ardham kaaledu. Please try again."
+
+            send_whatsapp(sender, reply)
+
+            return {"status": "audio processed"}
+
+
+        # =====================================
+        # OTHER TYPES
+        # =====================================
+
+        else:
+
+            print("Unsupported message type:", msg_type)
+
+            send_whatsapp(
+                sender,
+                "🙏 Supported message types:\n• Text\n• Voice\n• Menu buttons"
+            )
+
+            return {"status": "unsupported type"}
+
     except Exception as e:
 
-        print("Webhook error:", e)
+        print("Webhook error:", str(e))
 
-    return {"status": "ok"}
+        return {"status": "error"}
 
 
 # =====================================
@@ -130,12 +165,7 @@ def send_menu(to):
 
     print("Sending menu to", to)
 
-    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = get_headers()
 
     data = {
         "messaging_product": "whatsapp",
@@ -174,9 +204,10 @@ def send_menu(to):
         }
     }
 
-    r = requests.post(url, headers=headers, json=data)
+    r = requests.post(GRAPH_URL, headers=headers, json=data)
 
     print("Menu response:", r.status_code, r.text)
+
 
 # =====================================
 # BUTTON HANDLER
@@ -201,14 +232,6 @@ def handle_button(button):
             "📍 Temple Location:\n\n"
             "Cheruvugattu, Nalgonda\n\n"
             "https://maps.google.com/?q=17.17491,79.21219"
-        )
-
-    if button == "giripradakshina":
-
-        return (
-            "🚶 Giripradakshina:\n\n"
-            "Sacred pradakshina around hill.\n"
-            "Very powerful spiritual practice."
         )
 
     if button == "register":
@@ -269,18 +292,15 @@ def sarvam_reply(user_message):
     data = {
         "model": "sarvam-m",
         "messages": [
-
             {
                 "role": "system",
                 "content":
                 "You are assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple."
             },
-
             {
                 "role": "user",
                 "content": user_message
             }
-
         ]
     }
 
@@ -289,8 +309,6 @@ def sarvam_reply(user_message):
         response = requests.post(url, headers=headers, json=data)
 
         result = response.json()
-
-        print("Sarvam response:", result)
 
         return result["choices"][0]["message"]["content"]
 
@@ -307,37 +325,41 @@ def sarvam_reply(user_message):
 
 def speech_to_text(media_id):
 
-    print("Downloading audio")
+    try:
 
-    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
 
-    media = requests.get(
-        f"https://graph.facebook.com/v18.0/{media_id}",
-        headers=headers
-    ).json()
+        media = requests.get(
+            f"https://graph.facebook.com/v18.0/{media_id}",
+            headers=headers
+        ).json()
 
-    audio_url = media["url"]
+        audio_url = media["url"]
 
-    audio = requests.get(audio_url, headers=headers).content
+        audio = requests.get(audio_url, headers=headers).content
 
-    stt_url = "https://api.sarvam.ai/v1/speech-to-text"
+        stt_url = "https://api.sarvam.ai/v1/speech-to-text"
 
-    files = {"file": audio}
+        files = {"file": audio}
 
-    headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
+        headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
 
-    res = requests.post(stt_url, headers=headers, files=files)
+        res = requests.post(stt_url, headers=headers, files=files)
 
-    return res.json()["text"]
+        return res.json().get("text", "")
+
+    except Exception as e:
+
+        print("STT error:", e)
+
+        return ""
 
 
 # =====================================
-# SEND WHATSAPP MESSAGE
+# SEND MESSAGE
 # =====================================
 
 def send_whatsapp(to, message):
-
-    print("Sending message:", message)
 
     headers = get_headers()
 
