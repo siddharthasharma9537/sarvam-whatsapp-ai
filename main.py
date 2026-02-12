@@ -99,20 +99,22 @@ async def webhook(request: Request):
             send_whatsapp(sender, reply)
 
         # VOICE MESSAGE
-        elif msg_type == "audio":
+elif msg_type == "audio":
 
-            media_id = message_obj["audio"]["id"]
+    media_id = message_obj["audio"]["id"]
 
-            print("Audio received:", media_id)
+    print("Audio received:", media_id)
 
-            transcript = speech_to_text(media_id)
+    transcript = speech_to_text(media_id)
 
-            print("Transcript:", transcript)
+    print("Transcript:", transcript)
 
-            reply = sarvam_reply(transcript)
+    if transcript and transcript.strip() != "":
+        reply = sarvam_reply(transcript)
+    else:
+        reply = "క్షమించండి. Voice message clear ga ardham kaaledu. Please try again."
 
-            send_whatsapp(sender, reply)
-
+    send_whatsapp(sender, reply)
     except Exception as e:
 
         print("Webhook error:", e)
