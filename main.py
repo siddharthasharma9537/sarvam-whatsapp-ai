@@ -15,7 +15,7 @@ WHATSAPP_TOKEN = "EAANWTaYRRcwBQvpiXgaChb5kXBIB2m2dwFBTIc7OlYPC16oZAMGRmqZBPMhO6
 
 PHONE_NUMBER_ID = "1005546725973223"
 
-SARVAM_API_KEY = "sk_hd62veik_OvDhMIJXYoUfTPSa5DSdRJVj"
+GEMINI_API_KEY = "AIzaSyDBORYx8wmYPHMwKLhd6wTCA9EjiPufeX4"
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
@@ -87,7 +87,7 @@ async def webhook(request: Request):
                 register_devotee(sender, message)
                 return {"status": "registered"}
 
-            reply = sarvam_reply(message)
+            reply = gemini_reply(message)
 
             send_whatsapp(sender, reply)
 
@@ -126,7 +126,7 @@ async def webhook(request: Request):
             print("Transcript:", transcript)
 
             if transcript and transcript.strip() != "":
-                reply = sarvam_reply(transcript)
+                reply = gemini_reply(transcript)
             else:
                 reply = "క్షమించండి. Voice message clear ga ardham kaaledu. Please try again."
 
@@ -275,70 +275,44 @@ def register_devotee(phone, message):
 
 
 # =====================================
-# SARVAM AI CHAT
+# GEMINI AI CHAT
 # =====================================
 
-def sarvam_reply(user_message):
+def gemini_reply(user_message):
 
-    print("Sarvam processing:", user_message)
+    print("Gemini processing:", user_message)
 
-    url = "https://api.sarvam.ai/v1/chat/completions"
+    system_prompt = """
+You are temple assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple, Cheruvugattu, Nalgonda.
+
+Rules:
+• Reply respectfully
+• Use Telugu if user speaks Telugu
+• Use English if user speaks English
+• Keep replies clear and devotional
+
+Temple timings:
+Morning: 5:00 AM – 12:30 PM
+Evening: 3:00 PM – 7:00 PM
+
+Location:
+Cheruvugattu, Nalgonda
+"""
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
     headers = {
-        "Authorization": f"Bearer {SARVAM_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    system_prompt = """
-You are the official virtual assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Devasthanam, Cheruvugattu, Nalgonda.
-
-Your behavior rules:
-
-• Speak respectfully like temple staff
-• Prefer Telugu when user speaks Telugu
-• Use English when user speaks English
-• Use devotional tone
-• Be concise and clear
-
-Temple information:
-
-Temple Name:
-Sri Parvathi Jadala Ramalingeshwara Swamy Devasthanam
-
-Location:
-Cheruvugattu, Nalgonda, Telangana
-
-Temple Timings:
-Morning: 5:00 AM – 12:30 PM
-Evening: 3:00 PM – 7:00 PM
-Monday & Friday till 1 PM and 7:30 PM
-
-Giripradakshina:
-Sacred pradakshina around Cheruvugattu hill.
-
-Special power:
-Very powerful Shiva kshetram.
-
-If user greets:
-Reply with respectful devotional greeting.
-
-Example Telugu tone:
-"🙏 నమస్కారం. శ్రీ పార్వతి జడల రామలింగేశ్వర స్వామి దేవస్థానం సహాయకుడిని. మీకు ఎలా సహాయం చేయగలను?"
-
-Never say you are AI model.
-Say you are temple assistant.
-"""
-
     data = {
-        "model": "sarvam-m",
-        "messages": [
+        "contents": [
             {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": user_message
+                "parts": [
+                    {
+                        "text": system_prompt + "\n\nUser: " + user_message
+                    }
+                ]
             }
         ]
     }
@@ -347,20 +321,19 @@ Say you are temple assistant.
 
         response = requests.post(url, headers=headers, json=data)
 
+        print("Gemini status:", response.status_code)
+
         result = response.json()
 
-        reply = result["choices"][0]["message"]["content"]
+        print("Gemini response:", result)
 
-        print("Sarvam reply:", reply)
-
-        return reply
+        return result["candidates"][0]["content"]["parts"][0]["text"]
 
     except Exception as e:
 
-        print("Sarvam error:", str(e))
+        print("Gemini error:", str(e))
 
         return "🙏 క్షమించండి. ప్రస్తుతం సమాధానం ఇవ్వలేకపోతున్నాను."
-
 # =====================================
 # SPEECH TO TEXT
 # =====================================
