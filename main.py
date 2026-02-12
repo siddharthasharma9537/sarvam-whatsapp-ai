@@ -327,33 +327,70 @@ def speech_to_text(media_id):
 
     try:
 
-        headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+        print("Step 1: Getting media URL")
 
-        media = requests.get(
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+        }
+
+        media_res = requests.get(
             f"https://graph.facebook.com/v18.0/{media_id}",
             headers=headers
-        ).json()
+        )
 
-        audio_url = media["url"]
+        media_json = media_res.json()
 
-        audio = requests.get(audio_url, headers=headers).content
+        print("Media JSON:", media_json)
 
-        stt_url = "https://api.sarvam.ai/v1/speech-to-text"
+        audio_url = media_json.get("url")
 
-        files = {"file": audio}
+        if not audio_url:
+            print("No audio URL found")
+            return ""
 
-        headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
+        print("Step 2: Downloading audio file")
 
-        res = requests.post(stt_url, headers=headers, files=files)
+        audio_res = requests.get(audio_url, headers=headers)
 
-        return res.json().get("text", "")
+        audio_bytes = audio_res.content
+
+        print("Audio size:", len(audio_bytes))
+
+        if len(audio_bytes) == 0:
+            print("Audio empty")
+            return ""
+
+        print("Step 3: Sending to Sarvam STT")
+
+        stt_headers = {
+            "Authorization": f"Bearer {SARVAM_API_KEY}"
+        }
+
+        files = {
+            "file": ("audio.ogg", audio_bytes, "audio/ogg")
+        }
+
+        stt_res = requests.post(
+            "https://api.sarvam.ai/v1/speech-to-text",
+            headers=stt_headers,
+            files=files
+        )
+
+        print("STT status:", stt_res.status_code)
+        print("STT response:", stt_res.text)
+
+        if stt_res.status_code != 200:
+            return ""
+
+        result = stt_res.json()
+
+        return result.get("text", "")
 
     except Exception as e:
 
-        print("STT error:", e)
+        print("STT error:", str(e))
 
         return ""
-
 
 # =====================================
 # SEND MESSAGE
