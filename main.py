@@ -368,7 +368,7 @@ def speech_to_text(media_id):
         }
 
         response = requests.post(
-            "https://api.sarvam.ai/v1/audio/transcriptions",
+            "https://api.sarvam.ai/speech-to-text",
             headers=stt_headers,
             files=files,
             data=data
