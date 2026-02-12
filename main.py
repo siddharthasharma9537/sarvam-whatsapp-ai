@@ -1,20 +1,35 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 import requests
+import base64
+import os
 
 app = FastAPI()
 
-# Your existing tokens (unchanged)
+# =========================
+# CONFIG
+# =========================
+
 VERIFY_TOKEN = "siddharth_verify_token"
+
 WHATSAPP_TOKEN = "EAANWTaYRRcwBQpW2H2ZClGjeVvVKjCfZBNyc8qWCuPl1AYsBcHl5BZCa5ERxEtsrIVqurBKBX4TW3lqWnkgWwfsrICwi16YWRZAwPPuBLdPtYUxNxTJgZBiG21C7AJ8pPNXaZAIegbjuZCZBAFgEiW1bzTCCAiHeErkYSUgg5nZC1a8dJEcz6RZBbbsv77d3NDQTLvs6al7t81aS74JiodA7rX9cOC6gwiWYLnUKdklVL7JjZA0ZArWlp70nhWJCf9GgLRZASLeFMUXtEU9fosKdkzOOxmO7nrWCJ"
+
 PHONE_NUMBER_ID = "1005546725973223"
 
-# Add your Sarvam API key here
-SARVAM_API_KEY = "sk_hd62veik_OvDhMIJXYoUfTPSa5DSdRJVj"
+SARVAM_API_KEY = "YOUR_SARVAM_API_KEY"
 
+
+# Devotee database (temporary memory)
+devotees = {}
+
+
+# =========================
+# WEBHOOK VERIFY
+# =========================
 
 @app.get("/webhook")
 async def verify(request: Request):
+
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge")
@@ -25,24 +40,175 @@ async def verify(request: Request):
     return PlainTextResponse("Verification failed", status_code=403)
 
 
+# =========================
+# MAIN WEBHOOK
+# =========================
+
 @app.post("/webhook")
 async def webhook(request: Request):
+
     data = await request.json()
 
     try:
-        message = data["entry"][0]["changes"][0]["value"]["messages"][0]["text"]["body"]
-        sender = data["entry"][0]["changes"][0]["value"]["messages"][0]["from"]
 
-        # Generate AI reply using Sarvam
-        reply = sarvam_reply(message)
+        value = data["entry"][0]["changes"][0]["value"]
+        message_obj = value["messages"][0]
 
-        send_whatsapp(sender, reply)
+        sender = message_obj["from"]
+        msg_type = message_obj["type"]
+
+        # TEXT MESSAGE
+        if msg_type == "text":
+
+            message = message_obj["text"]["body"].lower()
+
+            if message in ["hi", "hello", "namaskaram", "menu", "start"]:
+                send_menu(sender)
+
+            elif message.startswith("register"):
+                register_devotee(sender, message)
+
+            else:
+                reply = sarvam_reply(message)
+                send_whatsapp(sender, reply)
+
+        # BUTTON CLICK
+        elif msg_type == "interactive":
+
+            button_id = message_obj["interactive"]["button_reply"]["id"]
+
+            reply = handle_button(button_id)
+
+            send_whatsapp(sender, reply)
+
+        # VOICE MESSAGE
+        elif msg_type == "audio":
+
+            media_id = message_obj["audio"]["id"]
+
+            transcript = speech_to_text(media_id)
+
+            reply = sarvam_reply(transcript)
+
+            send_whatsapp(sender, reply)
 
     except Exception as e:
         print("Error:", e)
 
     return {"status": "ok"}
 
+
+# =========================
+# MENU
+# =========================
+
+def send_menu(to):
+
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {
+                "text": "🙏 Namaskaram!\n\nSri Parvathi Jadala Ramalingeshwara Swamy Devasthanam Assistant\n\nPlease choose:"
+            },
+            "action": {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": "timings", "title": "Temple Timings"}},
+                    {"type": "reply", "reply": {"id": "location", "title": "Temple Location"}},
+                    {"type": "reply", "reply": {"id": "giripradakshina", "title": "Giripradakshina"}},
+                    {"type": "reply", "reply": {"id": "register", "title": "Register Devotee"}}
+                ]
+            }
+        }
+    }
+
+    requests.post(url, headers=headers, json=data)
+
+
+# =========================
+# BUTTON HANDLER
+# =========================
+
+def handle_button(button_id):
+
+    if button_id == "timings":
+
+        return """🕉 Temple timings:
+
+Morning: 5:00 AM – 12:30 PM
+Evening: 3:00 PM – 7:00 PM
+
+Monday & Friday:
+Morning: till 1:00 PM
+Evening: till 7:30 PM"""
+
+
+    if button_id == "location":
+
+        return """📍 Temple location:
+
+Cheruvugattu, Nalgonda District
+
+Google Maps:
+https://maps.google.com/?q=17.17491,79.21219"""
+
+
+    if button_id == "giripradakshina":
+
+        return """🚶 Giripradakshina:
+
+Sacred pradakshina around Cheruvugattu hill.
+
+Performed especially during Maha Shivaratri."""
+
+
+    if button_id == "register":
+
+        return """Please type:
+
+register YourName YourVillage
+
+Example:
+register Siddharth Nalgonda"""
+
+
+# =========================
+# REGISTER DEVOTEE
+# =========================
+
+def register_devotee(phone, message):
+
+    parts = message.split()
+
+    if len(parts) >= 3:
+
+        name = parts[1]
+        village = parts[2]
+
+        devotees[phone] = {
+            "name": name,
+            "village": village
+        }
+
+        send_whatsapp(phone, f"🙏 Registration successful.\nWelcome {name} from {village}.")
+
+    else:
+
+        send_whatsapp(phone, "Invalid format.\nType: register Name Village")
+
+
+# =========================
+# SARVAM AI
+# =========================
 
 def sarvam_reply(user_message):
 
@@ -57,51 +223,10 @@ def sarvam_reply(user_message):
         "model": "sarvam-m",
         "messages": [
             {
-    "role": "system",
-    "content": """
-You are the official AI assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Devasthanam.
+                "role": "system",
+                "content": """You are temple assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Devasthanam.
 
-Temple details:
-Name: Sri Parvathi Jadala Ramalingeshwara Swamy Devasthanam
-Location: Cheruvugattu, Narketpally Mandal, Nalgonda District, Telangana, India
-
-Temple timings:
-
-Sunday:
-Morning: 5:00 AM – 12:30 PM
-Evening: 3:00 PM – 7:00 PM
-
-Monday:
-Morning: 5:00 AM – 1:00 PM
-Evening: 3:00 PM – 7:30 PM
-
-Tuesday:
-Morning: 5:00 AM – 12:30 PM
-Evening: 3:00 PM – 7:00 PM
-
-Wednesday:
-Morning: 5:00 AM – 12:30 PM
-Evening: 3:00 PM – 7:00 PM
-
-Thursday:
-Morning: 5:00 AM – 12:30 PM
-Evening: 3:00 PM – 7:00 PM
-
-Friday:
-Morning: 5:00 AM – 1:00 PM
-Evening: 3:00 PM – 7:30 PM
-
-Saturday:
-Morning: 5:00 AM – 12:30 PM
-Evening: 3:00 PM – 7:00 PM
-
-Instructions:
-- If devotee asks temple timings, give correct timings based on day.
-- If devotee speaks Telugu, reply in Telugu.
-- If devotee speaks English, reply in English.
-- Be respectful and devotional.
-- Help devotees with darshan, location, and temple information.
-"""
+Reply Telugu or English based on user."""
             },
             {
                 "role": "user",
@@ -113,12 +238,43 @@ Instructions:
     response = requests.post(url, headers=headers, json=data)
 
     if response.status_code == 200:
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
-    else:
-        print("Sarvam error:", response.text)
-        return "క్షమించండి, ప్రస్తుతం సమాధానం ఇవ్వలేకపోతున్నాను. Please try again."
 
+        return response.json()["choices"][0]["message"]["content"]
+
+    return "క్షమించండి. Please try again."
+
+
+# =========================
+# SPEECH TO TEXT
+# =========================
+
+def speech_to_text(media_id):
+
+    url = f"https://graph.facebook.com/v18.0/{media_id}"
+
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
+
+    res = requests.get(url, headers=headers).json()
+
+    audio_url = res["url"]
+
+    audio_data = requests.get(audio_url, headers=headers).content
+
+    # send to Sarvam speech endpoint
+    stt_url = "https://api.sarvam.ai/v1/speech-to-text"
+
+    files = {"file": audio_data}
+
+    headers = {"Authorization": f"Bearer {SARVAM_API_KEY}"}
+
+    response = requests.post(stt_url, headers=headers, files=files)
+
+    return response.json()["text"]
+
+
+# =========================
+# SEND WHATSAPP TEXT
+# =========================
 
 def send_whatsapp(to, message):
 
@@ -137,3 +293,14 @@ def send_whatsapp(to, message):
     }
 
     requests.post(url, headers=headers, json=data)
+
+
+# =========================
+# BROADCAST ANNOUNCEMENT
+# =========================
+
+def broadcast(message):
+
+    for phone in devotees:
+
+        send_whatsapp(phone, message)
