@@ -345,22 +345,15 @@ def speech_to_text(media_id):
         audio_url = media_json.get("url")
 
         if not audio_url:
-            print("No audio URL found")
             return ""
 
-        print("Step 2: Downloading audio file")
+        print("Step 2: Downloading audio")
 
-        audio_res = requests.get(audio_url, headers=headers)
-
-        audio_bytes = audio_res.content
+        audio_bytes = requests.get(audio_url, headers=headers).content
 
         print("Audio size:", len(audio_bytes))
 
-        if len(audio_bytes) == 0:
-            print("Audio empty")
-            return ""
-
-        print("Step 3: Sending to Sarvam STT")
+        print("Step 3: Sending to Sarvam")
 
         stt_headers = {
             "Authorization": f"Bearer {SARVAM_API_KEY}"
@@ -370,21 +363,24 @@ def speech_to_text(media_id):
             "file": ("audio.ogg", audio_bytes, "audio/ogg")
         }
 
-        stt_res = requests.post(
-            "https://api.sarvam.ai/v1/speech-to-text",
+        data = {
+            "model": "saarika:v1"
+        }
+
+        response = requests.post(
+            "https://api.sarvam.ai/v1/audio/transcriptions",
             headers=stt_headers,
-            files=files
+            files=files,
+            data=data
         )
 
-        print("STT status:", stt_res.status_code)
-        print("STT response:", stt_res.text)
+        print("STT status:", response.status_code)
+        print("STT response:", response.text)
 
-        if stt_res.status_code != 200:
+        if response.status_code != 200:
             return ""
 
-        result = stt_res.json()
-
-        return result.get("text", "")
+        return response.json().get("text", "")
 
     except Exception as e:
 
