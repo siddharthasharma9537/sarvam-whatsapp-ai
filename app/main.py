@@ -1,1 +1,470 @@
 
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
+import requests
+import os
+import base64
+
+app = FastAPI()
+
+# =====================================================
+# CONFIG (ENV VARIABLES)
+# =====================================================
+
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
+
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+
+GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Temporary memory
+devotees = {}
+
+# =====================================================
+# WEBHOOK VERIFICATION
+# =====================================================
+
+@app.get("/webhook")
+async def verify(request: Request):
+
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    print("Webhook verification requested")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        print("Webhook verified successfully")
+        return PlainTextResponse(challenge)
+
+    return PlainTextResponse("Verification failed", status_code=403)
+
+
+# =====================================================
+# MAIN WEBHOOK
+# =====================================================
+
+@app.post("/webhook")
+async def webhook(request: Request):
+
+    data = await request.json()
+
+    print("Incoming webhook:", data)
+
+    try:
+
+        value = data["entry"][0]["changes"][0]["value"]
+
+        if "messages" not in value:
+            return {"status": "no message"}
+
+        message_obj = value["messages"][0]
+
+        sender = message_obj["from"]
+
+        msg_type = message_obj["type"]
+
+        print("Sender:", sender)
+        print("Type:", msg_type)
+
+        # =====================================================
+        # TEXT MESSAGE
+        # =====================================================
+
+        if msg_type == "text":
+
+            text = message_obj["text"]["body"]
+
+            print("Text:", text)
+
+            text_lower = text.lower()
+
+            if text_lower in ["hi", "hello", "namaskaram", "menu", "start"]:
+                send_menu(sender)
+                return {"status": "menu sent"}
+
+            if text_lower.startswith("register"):
+                register_devotee(sender, text)
+                return {"status": "registered"}
+
+            reply = gemini_reply(text)
+
+            send_whatsapp(sender, reply)
+
+        # =====================================================
+        # BUTTON CLICK
+        # =====================================================
+
+        elif msg_type == "interactive":
+
+            button_id = message_obj["interactive"]["button_reply"]["id"]
+
+            reply = handle_button(button_id)
+
+            send_whatsapp(sender, reply)
+
+        # =====================================================
+        # VOICE MESSAGE
+        # =====================================================
+
+        elif msg_type == "audio":
+
+            media_id = message_obj["audio"]["id"]
+
+            print("Audio received:", media_id)
+
+            transcript = speech_to_text(media_id)
+
+            print("Transcript:", transcript)
+
+            if transcript:
+
+                reply = gemini_reply(transcript)
+
+            else:
+
+                reply = "క్షమించండి. Voice message ardham kaaledu. Please try again."
+
+            send_whatsapp(sender, reply)
+
+    except Exception as e:
+
+        print("Webhook error:", e)
+
+    return {"status": "ok"}
+
+
+# =====================================================
+# SEND MENU
+# =====================================================
+
+def send_menu(to):
+
+    headers = get_headers()
+
+    data = {
+
+        "messaging_product": "whatsapp",
+
+        "to": to,
+
+        "type": "interactive",
+
+        "interactive": {
+
+            "type": "list",
+
+            "header": {
+                "type": "text",
+                "text": "Sri Parvathi Jadala Ramalingeshwara Swamy"
+            },
+
+            "body": {
+                "text": "🙏 Namaskaram!\nPlease select a service:"
+            },
+
+            "footer": {
+                "text": "Temple Assistant"
+            },
+
+            "action": {
+
+                "button": "View Menu",
+
+                "sections": [
+
+                    {
+                        "title": "Temple Information",
+
+                        "rows": [
+
+                            {
+                                "id": "timings",
+                                "title": "Temple Timings",
+                                "description": "View opening and closing times"
+                            },
+
+                            {
+                                "id": "location",
+                                "title": "Temple Location",
+                                "description": "View temple address and map"
+                            }
+
+                        ]
+                    },
+
+                    {
+                        "title": "Devotee Services",
+
+                        "rows": [
+
+                            {
+                                "id": "register",
+                                "title": "Register Devotee",
+                                "description": "Register for temple services"
+                            }
+
+                        ]
+                    },
+
+                    {
+                        "title": "Spiritual",
+
+                        "rows": [
+
+                            {
+                                "id": "ask",
+                                "title": "Ask Temple Assistant",
+                                "description": "Ask any spiritual question"
+                            }
+
+                        ]
+                    }
+
+                ]
+
+            }
+
+        }
+
+    }
+
+    requests.post(GRAPH_URL, headers=headers, json=data)
+
+
+# =====================================================
+# BUTTON HANDLER
+# =====================================================
+
+def handle_button(button):
+
+    if button == "timings":
+
+        return (
+            "🕉 Temple timings:\n\n"
+            "Morning: 5:00 AM – 12:30 PM\n"
+            "Evening: 3:00 PM – 7:00 PM"
+        )
+
+    if button == "location":
+
+        return (
+            "📍 Location:\n"
+            "https://maps.google.com/?q=17.17491,79.21219"
+        )
+
+    if button == "register":
+
+        return (
+            "Type:\n"
+            "register YourName Village\n\n"
+            "Example:\n"
+            "register Siddharth Nalgonda"
+        )
+
+    return "Please choose valid option."
+
+
+# =====================================================
+# REGISTER DEVOTEE
+# =====================================================
+
+def register_devotee(phone, text):
+
+    parts = text.split()
+
+    if len(parts) >= 3:
+
+        name = parts[1]
+        village = parts[2]
+
+        devotees[phone] = {
+            "name": name,
+            "village": village
+        }
+
+        send_whatsapp(
+            phone,
+            f"🙏 Registration successful\n{name} from {village}"
+        )
+
+    else:
+
+        send_whatsapp(
+            phone,
+            "Invalid format.\nUse:\nregister Name Village"
+        )
+
+
+# =====================================================
+# GEMINI INTELLIGENCE
+# =====================================================
+
+def gemini_reply(user_message):
+
+    try:
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
+
+        headers = {
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text":
+                            f"""
+You are official assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple.
+
+Rules:
+- Reply politely
+- Reply in same language as user (Telugu, English, Hindi, Tamil, Kannada, etc)
+- Give temple timings if asked
+- Give location if asked
+- Be respectful and devotional
+
+User message:
+{user_message}
+"""
+                        }
+                    ]
+                }
+            ]
+        }
+
+        response = requests.post(url, headers=headers, json=data)
+
+        result = response.json()
+
+        print("Gemini result:", result)
+
+        if "candidates" in result:
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+
+        return "🙏 Please try again."
+
+    except Exception as e:
+
+        print("Gemini error:", e)
+
+        return "🙏 Please try again."
+
+
+# =====================================================
+# GEMINI SPEECH TO TEXT (WORKS FOR ALL INDIAN LANGUAGES)
+# =====================================================
+
+def speech_to_text(media_id):
+
+    try:
+
+        print("Downloading audio")
+
+        whatsapp_headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+        }
+
+        # Get media URL
+        media = requests.get(
+            f"https://graph.facebook.com/v18.0/{media_id}",
+            headers=whatsapp_headers
+        ).json()
+
+        audio_url = media["url"]
+
+        # Download audio
+        audio_data = requests.get(
+            audio_url,
+            headers=whatsapp_headers
+        ).content
+
+        print("Audio size:", len(audio_data))
+
+        # Sarvam STT request
+        stt_headers = {
+            "api-subscription-key": SARVAM_API_KEY
+        }
+
+        files = {
+            "file": ("audio.ogg", audio_data, "audio/ogg")
+        }
+
+        response = requests.post(
+            "https://api.sarvam.ai/v1/speech-to-text",
+            headers=stt_headers,
+            files=files
+        )
+
+        print("Sarvam STT:", response.text)
+
+        if response.status_code == 200:
+
+            result = response.json()
+
+            return result.get("text", "")
+
+        return ""
+
+    except Exception as e:
+
+        print("STT error:", e)
+
+        return ""
+# =====================================================
+# SEND WHATSAPP MESSAGE
+# =====================================================
+
+def send_whatsapp(to, message):
+
+    headers = get_headers()
+
+    data = {
+
+        "messaging_product": "whatsapp",
+
+        "to": to,
+
+        "type": "text",
+
+        "text": {
+            "body": message
+        }
+
+    }
+
+    requests.post(GRAPH_URL, headers=headers, json=data)
+
+
+# =====================================================
+# HEADERS
+# =====================================================
+
+def get_headers():
+
+    return {
+
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+
+        "Content-Type": "application/json"
+
+    }
+
+
+# =====================================================
+# BROADCAST
+# =====================================================
+
+def broadcast(message):
+
+    for phone in devotees:
+
+        send_whatsapp(phone, message)
