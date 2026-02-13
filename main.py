@@ -279,47 +279,53 @@ def gemini_reply(user_message):
 
     try:
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
 
-        data = {
-
-            "contents": [
-
-                {
-
-                    "parts": [
-
-                        {
-
-                            "text":
-                            "You are temple assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple. "
-                            "Reply in user's language (Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali, Gujarati, Punjabi, Urdu, English). "
-                            "Be clear and helpful.\n\n"
-                            f"User: {user_message}"
-
-                        }
-
-                    ]
-
-                }
-
-            ]
-
+        headers = {
+            "Content-Type": "application/json"
         }
 
-        res = requests.post(url, json=data)
+        data = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text":
+                            f"""
+You are official assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple.
 
-        result = res.json()
+Rules:
+- Reply politely
+- Reply in same language as user (Telugu, English, Hindi, Tamil, Kannada, etc)
+- Give temple timings if asked
+- Give location if asked
+- Be respectful and devotional
 
-        print("Gemini response:", result)
+User message:
+{user_message}
+"""
+                        }
+                    ]
+                }
+            ]
+        }
 
-        return result["candidates"][0]["content"]["parts"][0]["text"]
+        response = requests.post(url, headers=headers, json=data)
+
+        result = response.json()
+
+        print("Gemini result:", result)
+
+        if "candidates" in result:
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+
+        return "🙏 Please try again."
 
     except Exception as e:
 
         print("Gemini error:", e)
 
-        return "Please try again."
+        return "🙏 Please try again."
 
 
 # =====================================================
