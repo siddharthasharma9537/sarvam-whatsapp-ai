@@ -332,26 +332,29 @@ def speech_to_text(media_id):
 
         print("Downloading audio")
 
-        headers = {
+        whatsapp_headers = {
             "Authorization": f"Bearer {WHATSAPP_TOKEN}"
         }
 
+        # Get media URL
         media = requests.get(
             f"https://graph.facebook.com/v18.0/{media_id}",
-            headers=headers
+            headers=whatsapp_headers
         ).json()
 
         audio_url = media["url"]
 
+        # Download audio
         audio_data = requests.get(
             audio_url,
-            headers=headers
+            headers=whatsapp_headers
         ).content
 
         print("Audio size:", len(audio_data))
 
+        # Sarvam STT request
         stt_headers = {
-            "Authorization": f"Bearer {SARVAM_API_KEY}"
+            "api-subscription-key": SARVAM_API_KEY
         }
 
         files = {
@@ -359,7 +362,7 @@ def speech_to_text(media_id):
         }
 
         response = requests.post(
-            "https://api.sarvam.ai/speech-to-text",
+            "https://api.sarvam.ai/v1/speech-to-text",
             headers=stt_headers,
             files=files
         )
@@ -368,7 +371,9 @@ def speech_to_text(media_id):
 
         if response.status_code == 200:
 
-            return response.json().get("text", "")
+            result = response.json()
+
+            return result.get("text", "")
 
         return ""
 
@@ -377,7 +382,6 @@ def speech_to_text(media_id):
         print("STT error:", e)
 
         return ""
-
 # =====================================================
 # SEND WHATSAPP MESSAGE
 # =====================================================
