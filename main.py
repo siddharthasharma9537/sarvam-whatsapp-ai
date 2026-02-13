@@ -16,6 +16,8 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 
+SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
+
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
