@@ -2,11 +2,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 import requests
 import os
+import base64
 
 app = FastAPI()
 
 # =====================================================
-# CONFIG (READ FROM ENVIRONMENT VARIABLES)
+# CONFIG (ENV VARIABLES)
 # =====================================================
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
@@ -17,11 +18,9 @@ PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
-
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Temporary in-memory database
+# Temporary memory
 devotees = {}
 
 # =====================================================
@@ -71,21 +70,23 @@ async def webhook(request: Request):
         print("Sender:", sender)
         print("Type:", msg_type)
 
-        # ==========================
+        # =====================================================
         # TEXT MESSAGE
-        # ==========================
+        # =====================================================
 
         if msg_type == "text":
 
-            text = message_obj["text"]["body"].lower()
+            text = message_obj["text"]["body"]
 
             print("Text:", text)
 
-            if text in ["hi", "hello", "namaskaram", "menu", "start"]:
+            text_lower = text.lower()
+
+            if text_lower in ["hi", "hello", "namaskaram", "menu", "start"]:
                 send_menu(sender)
                 return {"status": "menu sent"}
 
-            if text.startswith("register"):
+            if text_lower.startswith("register"):
                 register_devotee(sender, text)
                 return {"status": "registered"}
 
@@ -93,10 +94,9 @@ async def webhook(request: Request):
 
             send_whatsapp(sender, reply)
 
-
-        # ==========================
+        # =====================================================
         # BUTTON CLICK
-        # ==========================
+        # =====================================================
 
         elif msg_type == "interactive":
 
@@ -106,10 +106,9 @@ async def webhook(request: Request):
 
             send_whatsapp(sender, reply)
 
-
-        # ==========================
+        # =====================================================
         # VOICE MESSAGE
-        # ==========================
+        # =====================================================
 
         elif msg_type == "audio":
 
@@ -131,7 +130,6 @@ async def webhook(request: Request):
 
             send_whatsapp(sender, reply)
 
-
     except Exception as e:
 
         print("Webhook error:", e)
@@ -148,16 +146,28 @@ def send_menu(to):
     headers = get_headers()
 
     data = {
+
         "messaging_product": "whatsapp",
+
         "to": to,
+
         "type": "interactive",
+
         "interactive": {
+
             "type": "button",
+
             "body": {
+
                 "text":
-                "🙏 Namaskaram!\n\nSri Parvathi Jadala Ramalingeshwara Swamy Temple Assistant\n\nPlease choose:"
+                "🙏 Namaskaram!\n\n"
+                "Sri Parvathi Jadala Ramalingeshwara Swamy Temple Assistant\n\n"
+                "Please choose:"
+
             },
+
             "action": {
+
                 "buttons": [
 
                     {
@@ -185,8 +195,11 @@ def send_menu(to):
                     }
 
                 ]
+
             }
+
         }
+
     }
 
     requests.post(GRAPH_URL, headers=headers, json=data)
@@ -216,7 +229,10 @@ def handle_button(button):
     if button == "register":
 
         return (
-            "Type:\nregister YourName Village\n\nExample:\nregister Siddharth Nalgonda"
+            "Type:\n"
+            "register YourName Village\n\n"
+            "Example:\n"
+            "register Siddharth Nalgonda"
         )
 
     return "Please choose valid option."
@@ -249,12 +265,12 @@ def register_devotee(phone, text):
 
         send_whatsapp(
             phone,
-            "Invalid format. Use:\nregister Name Village"
+            "Invalid format.\nUse:\nregister Name Village"
         )
 
 
 # =====================================================
-# GEMINI AI (INTELLIGENCE)
+# GEMINI INTELLIGENCE
 # =====================================================
 
 def gemini_reply(user_message):
@@ -263,34 +279,35 @@ def gemini_reply(user_message):
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-        headers = {
-            "Content-Type": "application/json"
-        }
-
         data = {
 
             "contents": [
 
                 {
-                    "role": "user",
 
                     "parts": [
 
                         {
+
                             "text":
-                            f"You are temple assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple. Answer clearly.\n\nUser: {user_message}"
+                            "You are temple assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple. "
+                            "Reply in user's language (Telugu, Hindi, Tamil, Kannada, Malayalam, Marathi, Bengali, Gujarati, Punjabi, Urdu, English). "
+                            "Be clear and helpful.\n\n"
+                            f"User: {user_message}"
+
                         }
 
                     ]
+
                 }
 
             ]
 
         }
 
-        response = requests.post(url, headers=headers, json=data)
+        res = requests.post(url, json=data)
 
-        result = response.json()
+        result = res.json()
 
         print("Gemini response:", result)
 
@@ -304,7 +321,7 @@ def gemini_reply(user_message):
 
 
 # =====================================================
-# SARVAM SPEECH TO TEXT
+# GEMINI SPEECH TO TEXT (WORKS FOR ALL INDIAN LANGUAGES)
 # =====================================================
 
 def speech_to_text(media_id):
@@ -324,32 +341,54 @@ def speech_to_text(media_id):
 
         audio_url = media["url"]
 
-        audio_data = requests.get(
+        audio_bytes = requests.get(
             audio_url,
             headers=headers
         ).content
 
-        stt_headers = {
-            "Authorization": f"Bearer {SARVAM_API_KEY}"
+        print("Audio size:", len(audio_bytes))
+
+        audio_base64 = base64.b64encode(audio_bytes).decode()
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+
+        data = {
+
+            "contents": [
+
+                {
+
+                    "parts": [
+
+                        {
+                            "text":
+                            "Transcribe this audio exactly. Detect language automatically."
+                        },
+
+                        {
+                            "inline_data": {
+                                "mime_type": "audio/ogg",
+                                "data": audio_base64
+                            }
+                        }
+
+                    ]
+
+                }
+
+            ]
+
         }
 
-        files = {
-            "file": ("audio.ogg", audio_data, "audio/ogg")
-        }
+        res = requests.post(url, json=data)
 
-        response = requests.post(
-            "https://api.sarvam.ai/v1/speech-to-text",
-            headers=stt_headers,
-            files=files
-        )
+        result = res.json()
 
-        print("STT:", response.text)
+        print("Gemini STT:", result)
 
-        if response.status_code == 200:
+        transcript = result["candidates"][0]["content"]["parts"][0]["text"]
 
-            return response.json().get("text", "")
-
-        return ""
+        return transcript
 
     except Exception as e:
 
