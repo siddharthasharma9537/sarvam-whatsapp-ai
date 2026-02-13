@@ -341,61 +341,40 @@ def speech_to_text(media_id):
 
         audio_url = media["url"]
 
-        audio_bytes = requests.get(
+        audio_data = requests.get(
             audio_url,
             headers=headers
         ).content
 
-        print("Audio size:", len(audio_bytes))
+        print("Audio size:", len(audio_data))
 
-        audio_base64 = base64.b64encode(audio_bytes).decode()
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-
-        data = {
-
-            "contents": [
-
-                {
-
-                    "parts": [
-
-                        {
-                            "text":
-                            "Transcribe this audio exactly. Detect language automatically."
-                        },
-
-                        {
-                            "inline_data": {
-                                "mime_type": "audio/ogg",
-                                "data": audio_base64
-                            }
-                        }
-
-                    ]
-
-                }
-
-            ]
-
+        stt_headers = {
+            "Authorization": f"Bearer {SARVAM_API_KEY}"
         }
 
-        res = requests.post(url, json=data)
+        files = {
+            "file": ("audio.ogg", audio_data, "audio/ogg")
+        }
 
-        result = res.json()
+        response = requests.post(
+            "https://api.sarvam.ai/speech-to-text",
+            headers=stt_headers,
+            files=files
+        )
 
-        print("Gemini STT:", result)
+        print("Sarvam STT:", response.text)
 
-        transcript = result["candidates"][0]["content"]["parts"][0]["text"]
+        if response.status_code == 200:
 
-        return transcript
+            return response.json().get("text", "")
+
+        return ""
 
     except Exception as e:
 
         print("STT error:", e)
 
         return ""
-
 
 # =====================================================
 # SEND WHATSAPP MESSAGE
