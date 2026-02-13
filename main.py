@@ -360,15 +360,20 @@ def speech_to_text(media_id):
         audio_url = media_json.get("url")
 
         if not audio_url:
+            print("No audio URL found")
             return ""
 
         print("Step 2: Downloading audio")
 
-        audio_bytes = requests.get(audio_url, headers=headers).content
+        audio_res = requests.get(audio_url, headers=headers)
+
+        audio_bytes = audio_res.content
 
         print("Audio size:", len(audio_bytes))
 
         print("Step 3: Sending to Sarvam")
+
+        stt_url = "https://api.sarvam.ai/v1/audio/transcriptions"
 
         stt_headers = {
             "Authorization": f"Bearer {SARVAM_API_KEY}"
@@ -382,27 +387,30 @@ def speech_to_text(media_id):
             "model": "saarika:v1"
         }
 
-        response = requests.post(
-            "https://api.sarvam.ai/speech-to-text",
+        stt_res = requests.post(
+            stt_url,
             headers=stt_headers,
             files=files,
             data=data
         )
 
-        print("STT status:", response.status_code)
-        print("STT response:", response.text)
+        print("STT status:", stt_res.status_code)
+        print("STT response:", stt_res.text)
 
-        if response.status_code != 200:
+        if stt_res.status_code != 200:
             return ""
 
-        return response.json().get("text", "")
+        result = stt_res.json()
+
+        transcript = result.get("text", "")
+
+        return transcript
 
     except Exception as e:
 
         print("STT error:", str(e))
 
         return ""
-
 # =====================================
 # SEND MESSAGE
 # =====================================
