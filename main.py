@@ -157,43 +157,73 @@ def send_menu(to):
 
         "interactive": {
 
-            "type": "button",
+            "type": "list",
+
+            "header": {
+                "type": "text",
+                "text": "Sri Parvathi Jadala Ramalingeshwara Swamy"
+            },
 
             "body": {
+                "text": "🙏 Namaskaram!\nPlease select a service:"
+            },
 
-                "text":
-                "🙏 Namaskaram!\n\n"
-                "Sri Parvathi Jadala Ramalingeshwara Swamy Temple Assistant\n\n"
-                "Please choose:"
-
+            "footer": {
+                "text": "Temple Assistant"
             },
 
             "action": {
 
-                "buttons": [
+                "button": "View Menu",
+
+                "sections": [
 
                     {
-                        "type": "reply",
-                        "reply": {
-                            "id": "timings",
-                            "title": "Temple Timings"
-                        }
+                        "title": "Temple Information",
+
+                        "rows": [
+
+                            {
+                                "id": "timings",
+                                "title": "Temple Timings",
+                                "description": "View opening and closing times"
+                            },
+
+                            {
+                                "id": "location",
+                                "title": "Temple Location",
+                                "description": "View temple address and map"
+                            }
+
+                        ]
                     },
 
                     {
-                        "type": "reply",
-                        "reply": {
-                            "id": "location",
-                            "title": "Temple Location"
-                        }
+                        "title": "Devotee Services",
+
+                        "rows": [
+
+                            {
+                                "id": "register",
+                                "title": "Register Devotee",
+                                "description": "Register for temple services"
+                            }
+
+                        ]
                     },
 
                     {
-                        "type": "reply",
-                        "reply": {
-                            "id": "register",
-                            "title": "Register Devotee"
-                        }
+                        "title": "Spiritual",
+
+                        "rows": [
+
+                            {
+                                "id": "ask",
+                                "title": "Ask Temple Assistant",
+                                "description": "Ask any spiritual question"
+                            }
+
+                        ]
                     }
 
                 ]
