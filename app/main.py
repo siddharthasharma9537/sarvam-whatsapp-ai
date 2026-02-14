@@ -1,3 +1,4 @@
+from pymongo import MongoClient
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 import requests
@@ -26,8 +27,17 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-# Temporary in-memory storage
-devotees = {}
+# =====================================================
+# DATABASE (MongoDB)
+# =====================================================
+
+from pymongo import MongoClient
+
+MONGODB_URI = os.getenv("MONGODB_URI")
+
+client = MongoClient(MONGODB_URI)
+db = client["sohum_db"]
+devotees_collection = db["devotees"]
 
 
 # =====================================================
@@ -151,9 +161,12 @@ async def webhook(request: Request):
 # DEVOTEE REGISTRATION FLOW
 # =====================================================
 
+# Temporary step tracking (only for active session)
+registration_sessions = {}
+
 def start_registration(phone):
 
-    devotees[phone] = {
+    registration_sessions[phone] = {
         "step": "name"
     }
 
@@ -161,7 +174,8 @@ def start_registration(phone):
         phone,
         """🙏 Devotee Registration
 
-We will collect:
+For Temple Records and Seva Updates,
+please share the following details:
 
 1. Full Name
 2. Gotram
@@ -169,7 +183,7 @@ We will collect:
 4. Mobile Number
 5. Email (optional)
 
-If you do not have any detail, type: no
+If any detail is not available, please type: no
 
 Please enter your Full Name:"""
     )
@@ -177,71 +191,119 @@ Please enter your Full Name:"""
 
 def handle_registration(phone, text):
 
-    user = devotees.get(phone)
+    user = registration_sessions.get(phone)
+
+    if not user:
+        return
+
     step = user.get("step")
 
+    # ===============================
+    # STEP 1 — NAME
+    # ===============================
     if step == "name":
-        user["name"] = text
+        user["full_name"] = text
         user["step"] = "gotram"
         send_whatsapp(phone, "Please enter your Gotram (or type no):")
         return
 
+    # ===============================
+    # STEP 2 — GOTRAM
+    # ===============================
     if step == "gotram":
         user["gotram"] = text if text.lower() != "no" else "Not Provided"
         user["step"] = "address"
         send_whatsapp(phone, "Please enter your Address (or type no):")
         return
 
+    # ===============================
+    # STEP 3 — ADDRESS
+    # ===============================
     if step == "address":
         user["address"] = text if text.lower() != "no" else "Not Provided"
         user["step"] = "mobile"
         send_whatsapp(phone, "Please enter your Mobile Number:")
         return
 
+    # ===============================
+    # STEP 4 — MOBILE
+    # ===============================
     if step == "mobile":
-        user["mobile"] = text
+        user["mobile_number"] = text
         user["step"] = "email"
         send_whatsapp(phone, "Please enter your Email (or type no):")
         return
 
+    # ===============================
+    # STEP 5 — EMAIL
+    # ===============================
     if step == "email":
         user["email"] = text if text.lower() != "no" else "Not Provided"
         user["step"] = "confirm"
 
         send_whatsapp(
             phone,
-            f"""🙏 Please confirm your details:
+            f"""🙏 Please review your details:
 
-Full Name: {user['name']}
+Full Name: {user['full_name']}
 Gotram: {user['gotram']}
 Address: {user['address']}
-Mobile: {user['mobile']}
+Mobile: {user['mobile_number']}
 Email: {user['email']}
 
-Type YES to submit
-Type NO to cancel"""
+━━━━━━━━━━━━━━━━━━
+
+By submitting these details, you agree that
+the information will be used only for
+Temple records and temple-related communication.
+
+Reply YES to confirm and register
+Reply NO to cancel"""
         )
         return
 
+    # ===============================
+    # STEP 6 — CONFIRMATION
+    # ===============================
     if step == "confirm":
 
         if text.lower() == "yes":
-            user["phone"] = phone
-            user["step"] = "completed"
 
-            print("Registered devotee:", user)
+            # Save permanently in MongoDB
+            devotees_collection.update_one(
+                {"phone": phone},
+                {
+                    "$set": {
+                        "phone": phone,
+                        "full_name": user["full_name"],
+                        "gotram": user["gotram"],
+                        "address": user["address"],
+                        "mobile_number": user["mobile_number"],
+                        "email": user["email"],
+                        "consent": True,
+                        "consent_timestamp": datetime.utcnow(),
+                        "registered_at": datetime.utcnow(),
+                        "last_updated": datetime.utcnow()
+                    }
+                },
+                upsert=True
+            )
+
+            # Clear session
+            registration_sessions.pop(phone, None)
 
             send_whatsapp(
                 phone,
-                "🙏 Registration successful! Thank you for registering with the Temple."
+                "🙏 Registration successful!\n\nYou are now registered with the Temple."
             )
+
         else:
-            devotees.pop(phone, None)
+            registration_sessions.pop(phone, None)
+
             send_whatsapp(
                 phone,
-                "Registration cancelled. Type register to start again."
+                "Registration cancelled.\nYou may type register anytime to begin again."
             )
-
 
 # =====================================================
 # MENU
