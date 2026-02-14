@@ -94,22 +94,48 @@ async def webhook(request: Request):
             text = message_obj["text"]["body"]
             text_lower = text.strip().lower()
 
-            # REGISTRATION FLOW ACTIVE
+            # 🔁 REGISTRATION FLOW ACTIVE
             if sender in registration_sessions:
                 handle_registration(sender, text)
                 return {"status": "registration handled"}
 
-            # GREETING
+            # 👋 GREETING (AUTO DETECT REGISTERED DEVOTEES)
             if text_lower in ["hi", "hello", "namaskaram", "menu", "start"]:
-                send_menu(sender)
-                return {"status": "menu sent"}
 
-            # REGISTER COMMAND
+                existing = devotees_collection.find_one(
+                    {"phone": sender, "registration_status": "active"}
+                )
+
+                if existing:
+                    send_whatsapp(
+                        sender,
+                        f"🙏 Namaskaram {existing.get('full_name','')}!\n\n"
+                        "Welcome back to the Temple.\n"
+                        "Type menu to view available services."
+                    )
+                else:
+                    send_menu(sender)
+
+                return {"status": "greeting handled"}
+
+            # 🛑 PREVENT DUPLICATE REGISTRATION
             if text_lower == "register":
-                start_registration(sender)
-                return {"status": "registration started"}
 
-            # DEFAULT AI RESPONSE
+                existing = devotees_collection.find_one(
+                    {"phone": sender, "registration_status": "active"}
+                )
+
+                if existing:
+                    send_whatsapp(
+                        sender,
+                        "🙏 You are already registered with the Temple."
+                    )
+                else:
+                    start_registration(sender)
+
+                return {"status": "register handled"}
+
+            # 🤖 DEFAULT AI RESPONSE
             reply = gemini_reply(text)
             send_whatsapp(sender, reply)
 
@@ -131,7 +157,19 @@ async def webhook(request: Request):
             print("Selected:", selected_id)
 
             if selected_id == "register":
-                start_registration(sender)
+
+                existing = devotees_collection.find_one(
+                    {"phone": sender, "registration_status": "active"}
+                )
+
+                if existing:
+                    send_whatsapp(
+                        sender,
+                        "🙏 You are already registered."
+                    )
+                else:
+                    start_registration(sender)
+
             elif selected_id:
                 reply = handle_button(selected_id)
                 send_whatsapp(sender, reply)
@@ -256,6 +294,7 @@ Reply NO to cancel"""
                         "mobile_number": user["mobile_number"],
                         "email": user["email"],
                         "consent": True,
+                        "registration_status": "active",
                         "registered_at": datetime.utcnow(),
                         "last_updated": datetime.utcnow()
                     }},
