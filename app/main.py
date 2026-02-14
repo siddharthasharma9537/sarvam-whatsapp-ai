@@ -122,7 +122,7 @@ async def webhook(request: Request):
                 return {"status": "registration handled"}
 
             # GREETING
-            if text_lower in ["hi", "hello", "namaskaram", "menu", "start"]:
+            if text_lower in ["hi", "hello", "namaskaram", "start"]:
 
                 existing = devotees_collection.find_one({"phone": sender})
 
