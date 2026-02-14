@@ -15,6 +15,7 @@ app = FastAPI()
 async def health_check():
     return {"status": "alive"}
 
+
 # =====================================================
 # CONFIG
 # =====================================================
@@ -28,22 +29,42 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
+if not MONGODB_URI:
+    raise Exception("MONGODB_URI not set")
+
+
 # =====================================================
 # DATABASE
 # =====================================================
 
-if not MONGODB_URI:
-    raise Exception("MONGODB_URI not set")
-
 client = MongoClient(MONGODB_URI)
 db = client["sohum_db"]
 devotees_collection = db["devotees"]
+
+# Create unique index for phone (run safely)
+try:
+    devotees_collection.create_index("phone", unique=True)
+except:
+    pass
+
 
 # =====================================================
 # TEMP SESSION STORE
 # =====================================================
 
 registration_sessions = {}
+
+
+# =====================================================
+# PHONE NORMALIZER
+# =====================================================
+
+def normalize_phone(phone: str):
+    phone = phone.strip().replace("+", "")
+    if not phone.startswith("91"):
+        phone = "91" + phone
+    return phone
+
 
 # =====================================================
 # WEBHOOK VERIFICATION
@@ -59,6 +80,7 @@ async def verify(request: Request):
         return PlainTextResponse(challenge)
 
     return PlainTextResponse("Verification failed", status_code=403)
+
 
 # =====================================================
 # MAIN WEBHOOK
@@ -79,7 +101,7 @@ async def webhook(request: Request):
             return {"status": "no message"}
 
         message_obj = value["messages"][0]
-        sender = message_obj.get("from")
+        sender = normalize_phone(message_obj.get("from"))
         msg_type = message_obj.get("type")
 
         print("Sender:", sender)
@@ -94,38 +116,34 @@ async def webhook(request: Request):
             text = message_obj["text"]["body"]
             text_lower = text.strip().lower()
 
-            # 🔁 REGISTRATION FLOW ACTIVE
+            # REGISTRATION FLOW ACTIVE
             if sender in registration_sessions:
                 handle_registration(sender, text)
                 return {"status": "registration handled"}
 
-            # 👋 GREETING (AUTO DETECT REGISTERED DEVOTEES)
+            # GREETING
             if text_lower in ["hi", "hello", "namaskaram", "menu", "start"]:
 
-                existing = devotees_collection.find_one(
-                    {"phone": sender, "registration_status": "active"}
-                )
+                existing = devotees_collection.find_one({"phone": sender})
 
-                if existing:
+                if existing and existing.get("registration_status") == "active":
                     send_whatsapp(
                         sender,
                         f"🙏 Namaskaram {existing.get('full_name','')}!\n\n"
                         "Welcome back to the Temple.\n"
-                        "Type menu to view available services."
+                        "Type menu to view services."
                     )
                 else:
                     send_menu(sender)
 
                 return {"status": "greeting handled"}
 
-            # 🛑 PREVENT DUPLICATE REGISTRATION
+            # REGISTER COMMAND
             if text_lower == "register":
 
-                existing = devotees_collection.find_one(
-                    {"phone": sender, "registration_status": "active"}
-                )
+                existing = devotees_collection.find_one({"phone": sender})
 
-                if existing:
+                if existing and existing.get("registration_status") == "active":
                     send_whatsapp(
                         sender,
                         "🙏 You are already registered with the Temple."
@@ -135,12 +153,12 @@ async def webhook(request: Request):
 
                 return {"status": "register handled"}
 
-            # 🤖 DEFAULT AI RESPONSE
+            # DEFAULT AI
             reply = gemini_reply(text)
             send_whatsapp(sender, reply)
 
         # =========================
-        # INTERACTIVE MENU
+        # INTERACTIVE
         # =========================
 
         elif msg_type == "interactive":
@@ -154,19 +172,12 @@ async def webhook(request: Request):
             elif interactive.get("type") == "button_reply":
                 selected_id = interactive["button_reply"]["id"]
 
-            print("Selected:", selected_id)
-
             if selected_id == "register":
 
-                existing = devotees_collection.find_one(
-                    {"phone": sender, "registration_status": "active"}
-                )
+                existing = devotees_collection.find_one({"phone": sender})
 
-                if existing:
-                    send_whatsapp(
-                        sender,
-                        "🙏 You are already registered."
-                    )
+                if existing and existing.get("registration_status") == "active":
+                    send_whatsapp(sender, "🙏 You are already registered.")
                 else:
                     start_registration(sender)
 
@@ -195,6 +206,7 @@ async def webhook(request: Request):
 
     return {"status": "ok"}
 
+
 # =====================================================
 # REGISTRATION FLOW
 # =====================================================
@@ -208,7 +220,7 @@ def start_registration(phone):
         """🙏 Devotee Registration
 
 For Temple Records and Seva Updates,
-please share the following details:
+please share:
 
 1. Full Name
 2. Gotram
@@ -220,6 +232,7 @@ If any detail is not available, type: no
 
 Please enter your Full Name:"""
     )
+
 
 def handle_registration(phone, text):
 
@@ -268,12 +281,6 @@ Address: {user['address']}
 Mobile: {user['mobile_number']}
 Email: {user['email']}
 
-━━━━━━━━━━━━━━━━━━
-
-By submitting these details, you agree that
-the information will be used only for
-Temple records and temple-related communication.
-
 Reply YES to confirm
 Reply NO to cancel"""
         )
@@ -284,22 +291,18 @@ Reply NO to cancel"""
         if text.lower() == "yes":
 
             try:
-                devotees_collection.update_one(
-                    {"phone": phone},
-                    {"$set": {
-                        "phone": phone,
-                        "full_name": user["full_name"],
-                        "gotram": user["gotram"],
-                        "address": user["address"],
-                        "mobile_number": user["mobile_number"],
-                        "email": user["email"],
-                        "consent": True,
-                        "registration_status": "active",
-                        "registered_at": datetime.utcnow(),
-                        "last_updated": datetime.utcnow()
-                    }},
-                    upsert=True
-                )
+                devotees_collection.insert_one({
+                    "phone": phone,
+                    "full_name": user["full_name"],
+                    "gotram": user["gotram"],
+                    "address": user["address"],
+                    "mobile_number": user["mobile_number"],
+                    "email": user["email"],
+                    "consent": True,
+                    "registration_status": "active",
+                    "registered_at": datetime.utcnow(),
+                    "last_updated": datetime.utcnow()
+                })
 
                 send_whatsapp(
                     phone,
@@ -307,17 +310,17 @@ Reply NO to cancel"""
                 )
 
             except Exception as e:
-                print("Database error:", e)
+                print("Duplicate error:", e)
                 send_whatsapp(
                     phone,
-                    "⚠ Registration failed due to technical issue."
+                    "🙏 You are already registered with the Temple."
                 )
 
-            registration_sessions.pop(phone, None)
-
         else:
-            registration_sessions.pop(phone, None)
             send_whatsapp(phone, "Registration cancelled.")
+
+        registration_sessions.pop(phone, None)
+
 
 # =====================================================
 # MENU
@@ -333,16 +336,8 @@ def send_menu(to):
         "type": "interactive",
         "interactive": {
             "type": "list",
-            "header": {
-                "type": "text",
-                "text": "Sri Parvathi Jadala Ramalingeshwara Swamy"
-            },
-            "body": {
-                "text": "🙏 Namaskaram!\nPlease select a service:"
-            },
-            "footer": {
-                "text": "Temple Assistant"
-            },
+            "header": {"type": "text", "text": "Temple Services"},
+            "body": {"text": "🙏 Namaskaram!\nPlease select:"},
             "action": {
                 "button": "View Menu",
                 "sections": [
@@ -364,8 +359,8 @@ def send_menu(to):
         }
     }
 
-    response = requests.post(GRAPH_URL, headers=headers, json=data)
-    print("Menu response:", response.text)
+    requests.post(GRAPH_URL, headers=headers, json=data)
+
 
 # =====================================================
 # BUTTON HANDLER
@@ -379,7 +374,8 @@ def handle_button(button):
     if button == "location":
         return "📍 https://maps.google.com/?q=17.17491,79.21219"
 
-    return "Please choose a valid option."
+    return "Please choose valid option."
+
 
 # =====================================================
 # GEMINI AI
@@ -390,8 +386,6 @@ def gemini_reply(user_message):
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
 
-        headers = {"Content-Type": "application/json"}
-
         data = {
             "contents": [{
                 "parts": [{
@@ -400,7 +394,7 @@ def gemini_reply(user_message):
             }]
         }
 
-        response = requests.post(url, headers=headers, json=data)
+        response = requests.post(url, json=data)
         result = response.json()
 
         if "candidates" in result:
@@ -408,9 +402,9 @@ def gemini_reply(user_message):
 
         return "🙏 Please try again."
 
-    except Exception as e:
-        print("Gemini error:", e)
+    except:
         return "🙏 Please try again."
+
 
 # =====================================================
 # SPEECH TO TEXT
@@ -419,9 +413,7 @@ def gemini_reply(user_message):
 def speech_to_text(media_id):
 
     try:
-        whatsapp_headers = {
-            "Authorization": f"Bearer {WHATSAPP_TOKEN}"
-        }
+        whatsapp_headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
 
         media = requests.get(
             f"https://graph.facebook.com/v18.0/{media_id}",
@@ -435,13 +427,9 @@ def speech_to_text(media_id):
             headers=whatsapp_headers
         ).content
 
-        stt_headers = {
-            "api-subscription-key": SARVAM_API_KEY
-        }
+        stt_headers = {"api-subscription-key": SARVAM_API_KEY}
 
-        files = {
-            "file": ("audio.ogg", audio_data, "audio/ogg")
-        }
+        files = {"file": ("audio.ogg", audio_data, "audio/ogg")}
 
         response = requests.post(
             "https://api.sarvam.ai/v1/speech-to-text",
@@ -454,9 +442,9 @@ def speech_to_text(media_id):
 
         return ""
 
-    except Exception as e:
-        print("STT error:", e)
+    except:
         return ""
+
 
 # =====================================================
 # WHATSAPP SEND
@@ -475,6 +463,7 @@ def send_whatsapp(to, message):
 
     response = requests.post(GRAPH_URL, headers=headers, json=data)
     print("Send response:", response.text)
+
 
 def get_headers():
     return {
