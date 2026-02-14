@@ -277,18 +277,49 @@ Reply NO to cancel"""
 # MENU
 # =====================================================
 
-def send_menu(to):
+ddef send_menu(to):
+
     headers = get_headers()
 
     data = {
         "messaging_product": "whatsapp",
         "to": to,
-        "type": "text",
-        "text": {"body": "🙏 Namaskaram!\nType register to register as devotee."}
+        "type": "interactive",
+        "interactive": {
+            "type": "list",
+            "header": {
+                "type": "text",
+                "text": "Sri Parvathi Jadala Ramalingeshwara Swamy"
+            },
+            "body": {
+                "text": "🙏 Namaskaram!\nPlease select a service:"
+            },
+            "footer": {
+                "text": "Temple Assistant"
+            },
+            "action": {
+                "button": "View Menu",
+                "sections": [
+                    {
+                        "title": "Temple Information",
+                        "rows": [
+                            {"id": "timings", "title": "Temple Timings"},
+                            {"id": "location", "title": "Temple Location"}
+                        ]
+                    },
+                    {
+                        "title": "Devotee Services",
+                        "rows": [
+                            {"id": "register", "title": "Register Devotee"}
+                        ]
+                    }
+                ]
+            }
+        }
     }
 
-    requests.post(GRAPH_URL, headers=headers, json=data)
-
+    response = requests.post(GRAPH_URL, headers=headers, json=data)
+    print("Menu response:", response.text)
 # =====================================================
 # BUTTON HANDLER
 # =====================================================
