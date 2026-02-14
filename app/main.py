@@ -15,7 +15,6 @@ app = FastAPI()
 async def health_check():
     return {"status": "alive"}
 
-
 # =====================================================
 # CONFIG
 # =====================================================
@@ -34,14 +33,14 @@ GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 # =====================================================
 
 if not MONGODB_URI:
-    raise Exception("MONGODB_URI not set in environment variables")
+    raise Exception("MONGODB_URI not set")
 
 client = MongoClient(MONGODB_URI)
 db = client["sohum_db"]
 devotees_collection = db["devotees"]
 
 # =====================================================
-# TEMP REGISTRATION SESSION
+# TEMP SESSION STORE
 # =====================================================
 
 registration_sessions = {}
@@ -86,59 +85,60 @@ async def webhook(request: Request):
         print("Sender:", sender)
         print("Type:", msg_type)
 
-        # ===============================
+        # =========================
         # TEXT MESSAGE
-        # ===============================
+        # =========================
 
         if msg_type == "text":
 
             text = message_obj["text"]["body"]
-            text_lower = text.lower()
+            text_lower = text.strip().lower()
 
-            # 🔥 FIXED: use registration_sessions
+            # REGISTRATION FLOW ACTIVE
             if sender in registration_sessions:
                 handle_registration(sender, text)
-                return {"status": "registration step handled"}
+                return {"status": "registration handled"}
 
+            # GREETING
             if text_lower in ["hi", "hello", "namaskaram", "menu", "start"]:
                 send_menu(sender)
                 return {"status": "menu sent"}
 
+            # REGISTER COMMAND
             if text_lower == "register":
                 start_registration(sender)
                 return {"status": "registration started"}
 
+            # DEFAULT AI RESPONSE
             reply = gemini_reply(text)
             send_whatsapp(sender, reply)
 
-        # ===============================
-        # INTERACTIVE
-        # ===============================
+        # =========================
+        # INTERACTIVE MENU
+        # =========================
 
         elif msg_type == "interactive":
 
             interactive = message_obj.get("interactive", {})
-            interactive_type = interactive.get("type")
-
             selected_id = None
 
-            if interactive_type == "list_reply":
-                selected_id = interactive.get("list_reply", {}).get("id")
+            if interactive.get("type") == "list_reply":
+                selected_id = interactive["list_reply"]["id"]
 
-            elif interactive_type == "button_reply":
-                selected_id = interactive.get("button_reply", {}).get("id")
+            elif interactive.get("type") == "button_reply":
+                selected_id = interactive["button_reply"]["id"]
+
+            print("Selected:", selected_id)
 
             if selected_id == "register":
                 start_registration(sender)
             elif selected_id:
                 reply = handle_button(selected_id)
                 send_whatsapp(sender, reply)
-            else:
-                send_whatsapp(sender, "Please try again.")
 
-        # ===============================
-        # AUDIO MESSAGE
-        # ===============================
+        # =========================
+        # AUDIO
+        # =========================
 
         elif msg_type == "audio":
 
@@ -178,11 +178,10 @@ please share the following details:
 4. Mobile Number
 5. Email (optional)
 
-If any detail is not available, please type: no
+If any detail is not available, type: no
 
 Please enter your Full Name:"""
     )
-
 
 def handle_registration(phone, text):
 
@@ -237,7 +236,7 @@ By submitting these details, you agree that
 the information will be used only for
 Temple records and temple-related communication.
 
-Reply YES to confirm and register
+Reply YES to confirm
 Reply NO to cancel"""
         )
         return
@@ -246,28 +245,36 @@ Reply NO to cancel"""
 
         if text.lower() == "yes":
 
-            devotees_collection.update_one(
-                {"phone": phone},
-                {"$set": {
-                    "phone": phone,
-                    "full_name": user["full_name"],
-                    "gotram": user["gotram"],
-                    "address": user["address"],
-                    "mobile_number": user["mobile_number"],
-                    "email": user["email"],
-                    "consent": True,
-                    "registered_at": datetime.utcnow(),
-                    "last_updated": datetime.utcnow()
-                }},
-                upsert=True
-            )
+            try:
+                devotees_collection.update_one(
+                    {"phone": phone},
+                    {"$set": {
+                        "phone": phone,
+                        "full_name": user["full_name"],
+                        "gotram": user["gotram"],
+                        "address": user["address"],
+                        "mobile_number": user["mobile_number"],
+                        "email": user["email"],
+                        "consent": True,
+                        "registered_at": datetime.utcnow(),
+                        "last_updated": datetime.utcnow()
+                    }},
+                    upsert=True
+                )
+
+                send_whatsapp(
+                    phone,
+                    "🙏 Registration successful!\n\nYou are now registered with the Temple."
+                )
+
+            except Exception as e:
+                print("Database error:", e)
+                send_whatsapp(
+                    phone,
+                    "⚠ Registration failed due to technical issue."
+                )
 
             registration_sessions.pop(phone, None)
-
-            send_whatsapp(
-                phone,
-                "🙏 Registration successful!\n\nYou are now registered with the Temple."
-            )
 
         else:
             registration_sessions.pop(phone, None)
@@ -277,7 +284,7 @@ Reply NO to cancel"""
 # MENU
 # =====================================================
 
-ddef send_menu(to):
+def send_menu(to):
 
     headers = get_headers()
 
@@ -320,6 +327,7 @@ ddef send_menu(to):
 
     response = requests.post(GRAPH_URL, headers=headers, json=data)
     print("Menu response:", response.text)
+
 # =====================================================
 # BUTTON HANDLER
 # =====================================================
@@ -327,12 +335,12 @@ ddef send_menu(to):
 def handle_button(button):
 
     if button == "timings":
-        return "Temple timings: Morning 5:00–12:30, Evening 3:00–7:00"
+        return "🕉 Temple timings:\nMorning 5:00–12:30\nEvening 3:00–7:00"
 
     if button == "location":
-        return "https://maps.google.com/?q=17.17491,79.21219"
+        return "📍 https://maps.google.com/?q=17.17491,79.21219"
 
-    return "Please choose valid option."
+    return "Please choose a valid option."
 
 # =====================================================
 # GEMINI AI
@@ -366,6 +374,52 @@ def gemini_reply(user_message):
         return "🙏 Please try again."
 
 # =====================================================
+# SPEECH TO TEXT
+# =====================================================
+
+def speech_to_text(media_id):
+
+    try:
+        whatsapp_headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}"
+        }
+
+        media = requests.get(
+            f"https://graph.facebook.com/v18.0/{media_id}",
+            headers=whatsapp_headers
+        ).json()
+
+        audio_url = media["url"]
+
+        audio_data = requests.get(
+            audio_url,
+            headers=whatsapp_headers
+        ).content
+
+        stt_headers = {
+            "api-subscription-key": SARVAM_API_KEY
+        }
+
+        files = {
+            "file": ("audio.ogg", audio_data, "audio/ogg")
+        }
+
+        response = requests.post(
+            "https://api.sarvam.ai/v1/speech-to-text",
+            headers=stt_headers,
+            files=files
+        )
+
+        if response.status_code == 200:
+            return response.json().get("text", "")
+
+        return ""
+
+    except Exception as e:
+        print("STT error:", e)
+        return ""
+
+# =====================================================
 # WHATSAPP SEND
 # =====================================================
 
@@ -380,7 +434,8 @@ def send_whatsapp(to, message):
         "text": {"body": message}
     }
 
-    requests.post(GRAPH_URL, headers=headers, json=data)
+    response = requests.post(GRAPH_URL, headers=headers, json=data)
+    print("Send response:", response.text)
 
 def get_headers():
     return {
