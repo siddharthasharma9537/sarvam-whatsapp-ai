@@ -7,6 +7,12 @@ import base64
 
 app = FastAPI()
 
+# Health check endpoint for UptimeRobot
+@app.get("/")
+async def health_check():
+    return {"status": "alive"}
+
+
 # =====================================================
 # CONFIG (ENV VARIABLES)
 # =====================================================
