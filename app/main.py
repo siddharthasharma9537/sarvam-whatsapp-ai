@@ -1,10 +1,13 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from pymongo import MongoClient, ReturnDocument
 from datetime import datetime
+import razorpay
 import requests
 import os
 import logging
+import hmac
+import hashlib
 
 # =====================================================
 # APP INIT
@@ -15,17 +18,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TempleBot")
 
 # =====================================================
-# ENV CONFIG
+# ENV VARIABLES
 # =====================================================
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
-if not all([VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, GEMINI_API_KEY, MONGODB_URI]):
-    raise Exception("Missing environment variables")
+if not all([
+    VERIFY_TOKEN, WHATSAPP_TOKEN,
+    PHONE_NUMBER_ID, MONGODB_URI,
+    RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET,
+    RAZORPAY_WEBHOOK_SECRET
+]):
+    raise Exception("Missing required environment variables")
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
@@ -37,18 +47,25 @@ client = MongoClient(MONGODB_URI)
 db = client["sohum_db"]
 
 devotees = db["devotees"]
-seva_bookings = db["seva_bookings"]
-accommodation_bookings = db["accommodation_bookings"]
+bookings = db["bookings"]
 counters = db["counters"]
-festival_config = db["festival_config"]
 
 devotees.create_index("phone", unique=True)
+bookings.create_index("booking_id", unique=True)
 
 # =====================================================
-# SESSION STORES
+# RAZORPAY
 # =====================================================
 
-registration_sessions = {}
+razorpay_client = razorpay.Client(
+    auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
+)
+
+# =====================================================
+# SESSION STORE
+# =====================================================
+
+language_sessions = {}
 flow_sessions = {}
 
 # =====================================================
@@ -61,23 +78,20 @@ def normalize_phone(phone):
         phone = "91" + phone
     return phone
 
-def headers():
-    return {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
 def send_text(phone, message):
-    payload = {
+    data = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "text",
         "text": {"body": message}
     }
-    requests.post(GRAPH_URL, headers=headers(), json=payload)
+    requests.post(GRAPH_URL, headers={
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }, json=data)
 
 def send_buttons(phone, text, buttons):
-    payload = {
+    data = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "interactive",
@@ -87,30 +101,19 @@ def send_buttons(phone, text, buttons):
             "action": {"buttons": buttons}
         }
     }
-    requests.post(GRAPH_URL, headers=headers(), json=payload)
-
-def btn(id, title):
-    return {"type": "reply", "reply": {"id": id, "title": title}}
+    requests.post(GRAPH_URL, headers={
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }, json=data)
 
 def generate_booking_id(prefix):
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M")
     counter = counters.find_one_and_update(
         {"_id": prefix},
         {"$inc": {"seq": 1}},
         upsert=True,
         return_document=ReturnDocument.AFTER
     )
-    return f"SPJRS-{prefix}-{timestamp}-{counter['seq']:04d}"
-
-def get_user(phone):
-    return devotees.find_one({"phone": phone})
-
-def set_language(phone, lang):
-    devotees.update_one(
-        {"phone": phone},
-        {"$set": {"phone": phone, "language": lang}},
-        upsert=True
-    )
+    return f"SPJRSD-{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M')}-{counter['seq']:04d}"
 
 # =====================================================
 # HEALTH
@@ -121,7 +124,7 @@ async def health():
     return {"status": "alive"}
 
 # =====================================================
-# WEBHOOK VERIFY
+# WEBHOOK VERIFY (WhatsApp)
 # =====================================================
 
 @app.get("/webhook")
@@ -132,31 +135,52 @@ async def verify(request: Request):
     return PlainTextResponse("Verification failed", status_code=403)
 
 # =====================================================
-# MAIN WEBHOOK
+# MAIN WHATSAPP WEBHOOK
 # =====================================================
 
 @app.post("/webhook")
 async def webhook(request: Request):
 
-    try:
-        data = await request.json()
-        message = data["entry"][0]["changes"][0]["value"]["messages"][0]
+    data = await request.json()
 
+    try:
+        message = data["entry"][0]["changes"][0]["value"]["messages"][0]
         sender = normalize_phone(message["from"])
         msg_type = message["type"]
 
         if msg_type == "text":
-            text = message["text"]["body"].strip()
-            return handle_text(sender, text)
+            return handle_text(sender, message["text"]["body"].strip())
 
         if msg_type == "interactive":
-            selected_id = message["interactive"]["button_reply"]["id"]
-            return handle_navigation(sender, selected_id)
+            selected = message["interactive"]["button_reply"]["id"]
+            return handle_navigation(sender, selected)
 
     except Exception as e:
         logger.error(f"Webhook error: {e}")
 
     return {"status": "ok"}
+
+# =====================================================
+# TEXT HANDLER
+# =====================================================
+
+def handle_text(sender, text):
+
+    if text.lower() in ["hi", "hello", "namaste", "start"]:
+        send_language_selection(sender)
+        return {"status": "language"}
+
+    if text.lower().startswith("status"):
+        booking_id = text.split(" ")[1]
+        booking = bookings.find_one({"booking_id": booking_id})
+        if booking:
+            send_text(sender, f"Status: {booking['status']}")
+        else:
+            send_text(sender, "Booking not found.")
+        return {"status": "status"}
+
+    send_text(sender, "Please use menu options.")
+    return {"status": "unknown"}
 
 # =====================================================
 # LANGUAGE SELECTION
@@ -165,10 +189,10 @@ async def webhook(request: Request):
 def send_language_selection(phone):
     send_buttons(
         phone,
-        "Om Namah Shivaya 🙏\nPlease choose your language:\nదయచేసి మీ భాషను ఎంచుకోండి:",
+        "Om Namah Shivaya 🙏\nChoose Language / భాష ఎంచుకోండి:",
         [
-            btn("lang_en", "English 🇬🇧"),
-            btn("lang_tel", "తెలుగు 🇮🇳")
+            {"type":"reply","reply":{"id":"lang_en","title":"English 🇬🇧"}},
+            {"type":"reply","reply":{"id":"lang_tel","title":"తెలుగు 🇮🇳"}}
         ]
     )
 
@@ -178,207 +202,153 @@ def send_language_selection(phone):
 
 def send_main_menu(phone):
 
-    user = get_user(phone)
-    lang = user.get("language", "en") if user else "en"
+    lang = language_sessions.get(phone, "en")
 
-    # Festival banner
-    festival = festival_config.find_one({"active": True})
-    if festival:
-        send_text(phone, festival.get("message"))
-
-    if lang == "tel":
-        text = "మెయిన్ మెనూ ఎంపిక చేయండి:"
-        buttons = [
-            btn("darshan","🕉️ దర్శన సమయాలు"),
-            btn("seva","🙏 పూజా బుకింగ్"),
-            btn("accommodation","🏠 వసతి"),
+    if lang == "en":
+        text = "Main Menu:"
+        options = [
+            ("darshan","🕉 Darshan & Timings"),
+            ("seva","🙏 Seva Booking"),
+            ("accommodation","🏠 Accommodation"),
+            ("donation","💰 Donations"),
+            ("location","📍 Location"),
+            ("history","📜 History"),
+            ("contact","📞 Contact"),
+            ("change_lang","🌐 Change Language")
         ]
     else:
-        text = "Please choose a service:"
-        buttons = [
-            btn("darshan","🕉️ Darshan & Timings"),
-            btn("seva","🙏 Seva Booking"),
-            btn("accommodation","🏠 Accommodation"),
+        text = "మెయిన్ మెనూ:"
+        options = [
+            ("darshan","🕉 దర్శనం"),
+            ("seva","🙏 పూజా బుకింగ్"),
+            ("accommodation","🏠 వసతి"),
+            ("donation","💰 విరాళం"),
+            ("location","📍 మార్గం"),
+            ("history","📜 పురాణం"),
+            ("contact","📞 సంప్రదించండి"),
+            ("change_lang","🌐 భాష మార్చండి")
         ]
 
+    buttons = [
+        {"type":"reply","reply":{"id":i,"title":t}}
+        for i,t in options[:3]
+    ]
+
     send_buttons(phone, text, buttons)
-
-# =====================================================
-# TEXT HANDLER
-# =====================================================
-
-def handle_text(sender, text):
-
-    lower = text.lower()
-
-    if sender in registration_sessions:
-        handle_registration(sender, text)
-        return {"status":"registration"}
-
-    if sender in flow_sessions:
-        handle_booking_flow(sender, text)
-        return {"status":"flow"}
-
-    if lower in ["hi","hello","start","namaste"]:
-        send_language_selection(sender)
-        return {"status":"lang"}
-
-    if lower == "menu":
-        send_main_menu(sender)
-        return {"status":"menu"}
-
-    # AI fallback only unknown
-    reply = gemini_reply(text)
-    send_text(sender, reply)
-    return {"status":"ai"}
 
 # =====================================================
 # NAVIGATION
 # =====================================================
 
-def handle_navigation(phone, selected_id):
+def handle_navigation(phone, selected):
 
-    if selected_id == "lang_en":
-        set_language(phone,"en")
+    if selected == "lang_en":
+        language_sessions[phone] = "en"
         send_main_menu(phone)
+        return
 
-    elif selected_id == "lang_tel":
-        set_language(phone,"tel")
+    if selected == "lang_tel":
+        language_sessions[phone] = "tel"
         send_main_menu(phone)
+        return
 
-    elif selected_id == "darshan":
-        send_text(phone,"Morning 06:00–12:30\nEvening 05:00–08:30\n\nType menu.")
+    if selected == "change_lang":
+        send_language_selection(phone)
+        return
 
-    elif selected_id == "seva":
-        start_seva_booking(phone)
-
-    elif selected_id == "accommodation":
+    if selected == "accommodation":
         start_accommodation_booking(phone)
+        return
 
-    return {"status":"nav"}
-
-# =====================================================
-# SEVA BOOKING FLOW
-# =====================================================
-
-def start_seva_booking(phone):
-    flow_sessions[phone] = {"flow":"seva","step":"seva_name"}
-    send_text(phone,"Enter Seva Name:")
-
-def handle_booking_flow(phone, text):
-
-    session = flow_sessions[phone]
-
-    if session["flow"] == "seva":
-
-        if session["step"] == "seva_name":
-            session["seva"] = text
-            session["step"] = "date"
-            send_text(phone,"Enter Booking Date (YYYY-MM-DD):")
-
-        elif session["step"] == "date":
-            session["date"] = text
-            booking_id = generate_booking_id("SB")
-
-            seva_bookings.insert_one({
-                "booking_id": booking_id,
-                "phone": phone,
-                "seva": session["seva"],
-                "booking_date": session["date"],
-                "created_at": datetime.utcnow()
-            })
-
-            flow_sessions.pop(phone)
-            send_text(phone,f"Seva booked successfully!\nBooking ID: {booking_id}")
-            send_main_menu(phone)
+    send_main_menu(phone)
 
 # =====================================================
-# ACCOMMODATION FLOW
+# ACCOMMODATION BOOKING (FULL FLOW)
 # =====================================================
 
 def start_accommodation_booking(phone):
-    flow_sessions[phone] = {"flow":"acc","step":"room_type"}
-    send_text(phone,"Enter Room Type (Non-AC / AC / Dormitory):")
+
+    flow_sessions[phone] = {
+        "step": "room_type"
+    }
+
+    send_buttons(
+        phone,
+        "Select Room Type:",
+        [
+            {"type":"reply","reply":{"id":"room_nonac","title":"Non-AC ₹300"}},
+            {"type":"reply","reply":{"id":"room_ac","title":"AC ₹800"}},
+            {"type":"reply","reply":{"id":"room_dorm","title":"Dormitory ₹100"}}
+        ]
+    )
 
 # =====================================================
-# 5-STEP REGISTRATION
+# RAZORPAY PAYMENT LINK
 # =====================================================
 
-def start_registration(phone):
+def create_payment_link(amount, booking_id):
 
-    existing = get_user(phone)
-    if existing and existing.get("registration_status") == "active":
-        send_text(phone,"You are already registered.")
-        return
+    payment = razorpay_client.payment_link.create({
+        "amount": amount * 100,
+        "currency": "INR",
+        "description": "Temple Booking",
+        "reference_id": booking_id,
+        "callback_url": "https://your-domain.com",
+        "callback_method": "get",
+        "upi_link": True
+    })
 
-    registration_sessions[phone] = {"step":"name"}
-    send_text(phone,"Enter Full Name:")
-
-def handle_registration(phone, text):
-
-    session = registration_sessions[phone]
-
-    if session["step"] == "name":
-        session["name"] = text
-        session["step"] = "gotram"
-        send_text(phone,"Enter Gotram:")
-        return
-
-    if session["step"] == "gotram":
-        session["gotram"] = text
-        session["step"] = "address1"
-        send_text(phone,"Enter House No & Street:")
-        return
-
-    if session["step"] == "address1":
-        session["address1"] = text
-        session["step"] = "city"
-        send_text(phone,"Enter City:")
-        return
-
-    if session["step"] == "city":
-        session["city"] = text
-        session["step"] = "state"
-        send_text(phone,"Enter State:")
-        return
-
-    if session["step"] == "state":
-        session["state"] = text
-        session["step"] = "pincode"
-        send_text(phone,"Enter Pincode:")
-        return
-
-    if session["step"] == "pincode":
-
-        devotees.insert_one({
-            "phone": phone,
-            "full_name": session["name"],
-            "gotram": session["gotram"],
-            "address": {
-                "line1": session["address1"],
-                "city": session["city"],
-                "state": session["state"],
-                "pincode": text
-            },
-            "registration_status":"active",
-            "registered_at": datetime.utcnow()
-        })
-
-        registration_sessions.pop(phone)
-        send_text(phone,"Registration completed successfully.")
-        send_main_menu(phone)
+    return payment["short_url"], payment["id"]
 
 # =====================================================
-# GEMINI FALLBACK
+# RAZORPAY WEBHOOK
 # =====================================================
 
-def gemini_reply(text):
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "contents":[{"parts":[{"text":f"You are temple assistant.\nUser: {text}"}]}]
-        }
-        r = requests.post(url, json=payload)
-        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except:
-        return "Please type 'menu' to continue."
+@app.post("/razorpay/webhook")
+async def razorpay_webhook(request: Request):
+
+    body = await request.body()
+    signature = request.headers.get("X-Razorpay-Signature")
+
+    expected = hmac.new(
+        RAZORPAY_WEBHOOK_SECRET.encode(),
+        body,
+        hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    payload = await request.json()
+
+    if payload["event"] == "payment_link.paid":
+        payment = payload["payload"]["payment_link"]["entity"]
+        booking_id = payment["reference_id"]
+
+        bookings.update_one(
+            {"booking_id": booking_id},
+            {"$set": {"status": "paid"}}
+        )
+
+    return {"status": "ok"}
+
+# =====================================================
+# REFUND
+# =====================================================
+
+@app.post("/admin/refund/{booking_id}")
+async def refund_booking(booking_id: str):
+
+    booking = bookings.find_one({"booking_id": booking_id})
+
+    if not booking:
+        raise HTTPException(status_code=404)
+
+    razorpay_client.payment.refund(booking["razorpay_payment_id"])
+
+    bookings.update_one(
+        {"booking_id": booking_id},
+        {"$set": {"status": "refunded"}}
+    )
+
+    return {"status": "refund initiated"}
