@@ -41,7 +41,6 @@ client = MongoClient(MONGODB_URI)
 db = client["sohum_db"]
 devotees_collection = db["devotees"]
 
-# Create unique index for phone (run safely)
 try:
     devotees_collection.create_index("phone", unique=True)
 except:
@@ -49,10 +48,11 @@ except:
 
 
 # =====================================================
-# TEMP SESSION STORE
+# TEMP STORES
 # =====================================================
 
 registration_sessions = {}
+menu_sessions = {}
 
 
 # =====================================================
@@ -90,7 +90,6 @@ async def verify(request: Request):
 async def webhook(request: Request):
 
     data = await request.json()
-    print("Incoming:", data)
 
     try:
         entry = data.get("entry", [])[0]
@@ -104,58 +103,37 @@ async def webhook(request: Request):
         sender = normalize_phone(message_obj.get("from"))
         msg_type = message_obj.get("type")
 
-        print("Sender:", sender)
-        print("Type:", msg_type)
-
         # =========================
         # TEXT MESSAGE
         # =========================
 
         if msg_type == "text":
 
-            text = message_obj["text"]["body"]
-            text_lower = text.strip().lower()
+            text = message_obj["text"]["body"].strip()
+            text_lower = text.lower()
 
-            # REGISTRATION FLOW ACTIVE
+            # REGISTRATION FLOW
             if sender in registration_sessions:
                 handle_registration(sender, text)
                 return {"status": "registration handled"}
 
             # GREETING
-            if text_lower in ["hi", "hello", "namaskaram", "start"]:
-
-                existing = devotees_collection.find_one({"phone": sender})
-
-                if existing and existing.get("registration_status") == "active":
-                    send_whatsapp(
-                        sender,
-                        f"🙏 Namaskaram {existing.get('full_name','')}!\n\n"
-                        "Welcome back to the Temple.\n"
-                        "Type menu to view services."
-                    )
-                else:
-                    send_menu(sender)
-
-                return {"status": "greeting handled"}
+            if text_lower in ["hi", "hello", "namaskaram", "start", "menu"]:
+                send_main_menu(sender)
+                return {"status": "main menu shown"}
 
             # REGISTER COMMAND
             if text_lower == "register":
-
                 existing = devotees_collection.find_one({"phone": sender})
-
                 if existing and existing.get("registration_status") == "active":
-                    send_whatsapp(
-                        sender,
-                        "🙏 You are already registered with the Temple."
-                    )
+                    send_text(sender, "🙏 You are already registered.")
                 else:
                     start_registration(sender)
-
                 return {"status": "register handled"}
 
-            # DEFAULT AI
+            # UNKNOWN → AI FALLBACK
             reply = gemini_reply(text)
-            send_whatsapp(sender, reply)
+            send_text(sender, reply)
 
         # =========================
         # INTERACTIVE
@@ -172,18 +150,7 @@ async def webhook(request: Request):
             elif interactive.get("type") == "button_reply":
                 selected_id = interactive["button_reply"]["id"]
 
-            if selected_id == "register":
-
-                existing = devotees_collection.find_one({"phone": sender})
-
-                if existing and existing.get("registration_status") == "active":
-                    send_whatsapp(sender, "🙏 You are already registered.")
-                else:
-                    start_registration(sender)
-
-            elif selected_id:
-                reply = handle_button(selected_id)
-                send_whatsapp(sender, reply)
+            handle_menu_selection(sender, selected_id)
 
         # =========================
         # AUDIO
@@ -199,7 +166,7 @@ async def webhook(request: Request):
             else:
                 reply = "🙏 Sorry, I could not understand the voice message."
 
-            send_whatsapp(sender, reply)
+            send_text(sender, reply)
 
     except Exception as e:
         print("Webhook error:", e)
@@ -208,125 +175,134 @@ async def webhook(request: Request):
 
 
 # =====================================================
+# STRUCTURED NAVIGATION
+# =====================================================
+
+def send_main_menu(phone):
+
+    menu_sessions[phone] = {"level": "main"}
+
+    rows = [
+        {
+            "id": "l1_temple",
+            "title": "Temple Services",
+            "description": "Darshan Timings, Sevas, Events"
+        },
+        {
+            "id": "l1_devotee",
+            "title": "Devotee Services",
+            "description": "Register, Donations, My Details"
+        }
+    ]
+
+    send_list(phone, "☰ Main Menu", "Please choose a service:", rows)
+
+
+def send_level2_menu(phone, category):
+
+    menu_sessions[phone] = {"level": "level2", "parent": category}
+
+    if category == "l1_temple":
+        rows = [
+            {"id": "timings", "title": "Temple Timings", "description": "Daily Darshan Schedule"},
+            {"id": "location", "title": "Temple Location", "description": "Google Maps Location"},
+        ]
+
+    elif category == "l1_devotee":
+        rows = [
+            {"id": "register", "title": "Register Devotee", "description": "Join Temple Records"},
+            {"id": "donate", "title": "Donate", "description": "Support Temple Activities"},
+        ]
+
+    # Always add navigation rows
+    rows.append({"id": "go_back", "title": "↩ Go Back", "description": "Return to previous menu"})
+    rows.append({"id": "main_menu", "title": "☰ Main Menu", "description": "Return to main menu"})
+
+    send_list(phone, "Temple Services", "Select an option:", rows)
+
+
+def handle_menu_selection(phone, selected_id):
+
+    if not selected_id:
+        return
+
+    if selected_id == "main_menu":
+        send_main_menu(phone)
+        return
+
+    if selected_id == "go_back":
+        send_main_menu(phone)
+        return
+
+    if selected_id.startswith("l1_"):
+        send_level2_menu(phone, selected_id)
+        return
+
+    # LEVEL 2 ACTIONS
+    if selected_id == "timings":
+        send_text(phone, "🕉 Morning: 5:00–12:30\nEvening: 3:00–7:00")
+        return
+
+    if selected_id == "location":
+        send_text(phone, "📍 https://maps.google.com/?q=17.17491,79.21219")
+        return
+
+    if selected_id == "register":
+        start_registration(phone)
+        return
+
+    if selected_id == "donate":
+        send_text(phone, "🙏 Donation link coming soon.")
+        return
+
+
+# =====================================================
 # REGISTRATION FLOW
 # =====================================================
 
 def start_registration(phone):
-
     registration_sessions[phone] = {"step": "name"}
-
-    send_whatsapp(
-        phone,
-        """🙏 Devotee Registration
-
-For Temple Records and Seva Updates,
-please share:
-
-1. Full Name
-2. Gotram
-3. Address
-4. Mobile Number
-5. Email (optional)
-
-If any detail is not available, type: no
-
-Please enter your Full Name:"""
-    )
+    send_text(phone, "🙏 Please enter your Full Name:")
 
 
 def handle_registration(phone, text):
 
     user = registration_sessions.get(phone)
-    if not user:
-        return
-
     step = user["step"]
 
     if step == "name":
         user["full_name"] = text
-        user["step"] = "gotram"
-        send_whatsapp(phone, "Please enter your Gotram (or type no):")
-        return
-
-    if step == "gotram":
-        user["gotram"] = text if text.lower() != "no" else "Not Provided"
-        user["step"] = "address"
-        send_whatsapp(phone, "Please enter your Address (or type no):")
-        return
-
-    if step == "address":
-        user["address"] = text if text.lower() != "no" else "Not Provided"
-        user["step"] = "mobile"
-        send_whatsapp(phone, "Please enter your Mobile Number:")
-        return
-
-    if step == "mobile":
-        user["mobile_number"] = text
-        user["step"] = "email"
-        send_whatsapp(phone, "Please enter your Email (or type no):")
-        return
-
-    if step == "email":
-
-        user["email"] = text if text.lower() != "no" else "Not Provided"
         user["step"] = "confirm"
-
-        send_whatsapp(
-            phone,
-            f"""🙏 Please review your details:
-
-Full Name: {user['full_name']}
-Gotram: {user['gotram']}
-Address: {user['address']}
-Mobile: {user['mobile_number']}
-Email: {user['email']}
-
-Reply YES to confirm
-Reply NO to cancel"""
-        )
+        send_text(phone, f"Confirm registration for {text}? Reply YES to confirm.")
         return
 
     if step == "confirm":
-
         if text.lower() == "yes":
-
             try:
-                devotees_collection.insert_one({
-                    "phone": phone,
-                    "full_name": user["full_name"],
-                    "gotram": user["gotram"],
-                    "address": user["address"],
-                    "mobile_number": user["mobile_number"],
-                    "email": user["email"],
-                    "consent": True,
-                    "registration_status": "active",
-                    "registered_at": datetime.utcnow(),
-                    "last_updated": datetime.utcnow()
-                })
-
-                send_whatsapp(
-                    phone,
-                    "🙏 Registration successful!\n\nYou are now registered with the Temple."
+                devotees_collection.update_one(
+                    {"phone": phone},
+                    {"$set": {
+                        "phone": phone,
+                        "full_name": user["full_name"],
+                        "registration_status": "active",
+                        "registered_at": datetime.utcnow()
+                    }},
+                    upsert=True
                 )
-
-            except Exception as e:
-                print("Duplicate error:", e)
-                send_whatsapp(
-                    phone,
-                    "🙏 You are already registered with the Temple."
-                )
-
+                send_text(phone, "🙏 Registration successful!")
+            except:
+                send_text(phone, "🙏 Already registered.")
         else:
-            send_whatsapp(phone, "Registration cancelled.")
+            send_text(phone, "Registration cancelled.")
 
         registration_sessions.pop(phone, None)
 
 
 # =====================================================
-# MENU
+# LIST SENDER
 # =====================================================
 
-def send_menu(to):
+def send_list(to, header, body, rows):
 
     headers = get_headers()
 
@@ -336,23 +312,14 @@ def send_menu(to):
         "type": "interactive",
         "interactive": {
             "type": "list",
-            "header": {"type": "text", "text": "Temple Services"},
-            "body": {"text": "🙏 Namaskaram!\nPlease select:"},
+            "header": {"type": "text", "text": header},
+            "body": {"text": body},
             "action": {
-                "button": "View Menu",
+                "button": "View Options",
                 "sections": [
                     {
-                        "title": "Temple Information",
-                        "rows": [
-                            {"id": "timings", "title": "Temple Timings"},
-                            {"id": "location", "title": "Temple Location"}
-                        ]
-                    },
-                    {
-                        "title": "Devotee Services",
-                        "rows": [
-                            {"id": "register", "title": "Register Devotee"}
-                        ]
+                        "title": "Services",
+                        "rows": rows
                     }
                 ]
             }
@@ -363,18 +330,20 @@ def send_menu(to):
 
 
 # =====================================================
-# BUTTON HANDLER
+# TEXT SENDER
 # =====================================================
 
-def handle_button(button):
+def send_text(to, message):
+    headers = get_headers()
 
-    if button == "timings":
-        return "🕉 Temple timings:\nMorning 5:00–12:30\nEvening 3:00–7:00"
+    data = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": message}
+    }
 
-    if button == "location":
-        return "📍 https://maps.google.com/?q=17.17491,79.21219"
-
-    return "Please choose valid option."
+    requests.post(GRAPH_URL, headers=headers, json=data)
 
 
 # =====================================================
@@ -382,15 +351,12 @@ def handle_button(button):
 # =====================================================
 
 def gemini_reply(user_message):
-
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
 
         data = {
             "contents": [{
-                "parts": [{
-                    "text": f"You are temple assistant.\nUser: {user_message}"
-                }]
+                "parts": [{"text": f"You are a temple assistant.\nUser: {user_message}"}]
             }]
         }
 
@@ -411,7 +377,6 @@ def gemini_reply(user_message):
 # =====================================================
 
 def speech_to_text(media_id):
-
     try:
         whatsapp_headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
 
@@ -447,23 +412,8 @@ def speech_to_text(media_id):
 
 
 # =====================================================
-# WHATSAPP SEND
+# HEADERS
 # =====================================================
-
-def send_whatsapp(to, message):
-
-    headers = get_headers()
-
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": message}
-    }
-
-    response = requests.post(GRAPH_URL, headers=headers, json=data)
-    print("Send response:", response.text)
-
 
 def get_headers():
     return {
