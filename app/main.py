@@ -31,23 +31,11 @@ RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
 missing_vars = []
 
-if not VERIFY_TOKEN:
-    missing_vars.append("VERIFY_TOKEN")
-if not WHATSAPP_TOKEN:
-    missing_vars.append("WHATSAPP_TOKEN")
-if not PHONE_NUMBER_ID:
-    missing_vars.append("PHONE_NUMBER_ID")
-if not MONGODB_URI:
-    missing_vars.append("MONGODB_URI")
-if not RAZORPAY_KEY_ID:
-    missing_vars.append("RAZORPAY_KEY_ID")
-if not RAZORPAY_KEY_SECRET:
-    missing_vars.append("RAZORPAY_KEY_SECRET")
-if not RAZORPAY_WEBHOOK_SECRET:
-    missing_vars.append("RAZORPAY_WEBHOOK_SECRET")
-
-if missing_vars:
-    raise Exception(f"Missing required environment variables: {missing_vars}")
+if not all([
+    VERIFY_TOKEN, WHATSAPP_TOKEN,
+    PHONE_NUMBER_ID, MONGODB_URI
+]):
+    raise Exception("Missing core environment variables")
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
