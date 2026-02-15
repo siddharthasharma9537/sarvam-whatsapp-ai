@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 from datetime import datetime
 import requests
 import os
@@ -11,10 +11,6 @@ import logging
 # =====================================================
 
 app = FastAPI()
-
-# =====================================================
-# LOGGING
-# =====================================================
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TempleBot")
@@ -30,7 +26,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
 
 if not all([VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, GEMINI_API_KEY, MONGODB_URI]):
-    raise Exception("One or more environment variables missing.")
+    raise Exception("Missing environment variables")
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
@@ -40,7 +36,13 @@ GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
 client = MongoClient(MONGODB_URI)
 db = client["sohum_db"]
+
 devotees = db["devotees"]
+sevas_master = db["sevas_master"]
+accommodation_master = db["accommodation_master"]
+seva_bookings = db["seva_bookings"]
+accommodation_bookings = db["accommodation_bookings"]
+counters = db["counters"]
 
 devotees.create_index("phone", unique=True)
 
@@ -49,40 +51,23 @@ devotees.create_index("phone", unique=True)
 # =====================================================
 
 registration_sessions = {}
-navigation_sessions = {}
-
-# =====================================================
-# HEALTH CHECK
-# =====================================================
-
-@app.get("/")
-async def health():
-    return {"status": "alive"}
-
-# =====================================================
-# ADMIN APIs
-# =====================================================
-
-@app.get("/admin/devotees")
-async def list_devotees():
-    return list(devotees.find({}, {"_id": 0}))
-
-@app.get("/admin/devotee/{phone}")
-async def get_devotee(phone: str):
-    user = devotees.find_one({"phone": phone}, {"_id": 0})
-    if not user:
-        raise HTTPException(status_code=404, detail="Devotee not found")
-    return user
+flow_sessions = {}
 
 # =====================================================
 # UTILITIES
 # =====================================================
 
-def normalize_phone(phone: str):
-    phone = phone.strip().replace("+", "")
+def normalize_phone(phone):
+    phone = phone.replace("+", "")
     if not phone.startswith("91"):
         phone = "91" + phone
     return phone
+
+def get_headers():
+    return {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
 def send_text(phone, message):
     data = {
@@ -93,24 +78,62 @@ def send_text(phone, message):
     }
     requests.post(GRAPH_URL, headers=get_headers(), json=data)
 
-def send_buttons(phone, body_text, buttons):
+def send_buttons(phone, text, buttons):
     data = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "interactive",
         "interactive": {
             "type": "button",
-            "body": {"text": body_text},
+            "body": {"text": text},
             "action": {"buttons": buttons}
         }
     }
     requests.post(GRAPH_URL, headers=get_headers(), json=data)
 
-def get_headers():
-    return {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
+# =====================================================
+# BOOKING ID ENGINE
+# =====================================================
+
+def generate_booking_id(prefix):
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M")
+
+    counter_doc = counters.find_one_and_update(
+        {"_id": prefix},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER
+    )
+
+    seq = counter_doc["seq"]
+    return f"SPJRSD-{prefix}-{timestamp}-{seq:04d}"
+
+# =====================================================
+# HEALTH
+# =====================================================
+
+@app.get("/")
+async def health():
+    return {"status": "alive"}
+
+# =====================================================
+# ADMIN
+# =====================================================
+
+@app.get("/admin/bookings/seva")
+async def list_seva_bookings(date: str = None):
+    query = {}
+    if date:
+        query["booking_date"] = date
+    return list(seva_bookings.find(query, {"_id": 0}))
+
+@app.get("/admin/bookings/accommodation")
+async def list_accommodation_bookings(date: str = None):
+    query = {}
+    if date:
+        query["booking_date"] = date
+    return list(accommodation_bookings.find(query, {"_id": 0}))
 
 # =====================================================
 # WEBHOOK VERIFY
@@ -137,21 +160,12 @@ async def webhook(request: Request):
         sender = normalize_phone(message["from"])
         msg_type = message["type"]
 
-        logger.info(f"Incoming from {sender} - {msg_type}")
-
         if msg_type == "text":
             text = message["text"]["body"].strip()
             return handle_text(sender, text)
 
         if msg_type == "interactive":
-            interactive = message["interactive"]
-            selected_id = None
-
-            if interactive["type"] == "button_reply":
-                selected_id = interactive["button_reply"]["id"]
-            if interactive["type"] == "list_reply":
-                selected_id = interactive["list_reply"]["id"]
-
+            selected_id = message["interactive"]["button_reply"]["id"]
             return handle_navigation(sender, selected_id)
 
     except Exception as e:
@@ -165,21 +179,23 @@ async def webhook(request: Request):
 
 def handle_text(sender, text):
 
-    text_lower = text.lower()
-
     if sender in registration_sessions:
         handle_registration(sender, text)
-        return {"status": "registration flow"}
+        return {"status": "registration"}
 
-    if text_lower in ["hi", "hello", "start", "menu"]:
+    if sender in flow_sessions:
+        handle_booking_flow(sender, text)
+        return {"status": "flow"}
+
+    if text.lower() in ["hi", "hello", "menu", "start"]:
         send_main_menu(sender)
         return {"status": "menu"}
 
-    if text_lower == "register":
+    if text.lower() == "register":
         start_registration(sender)
-        return {"status": "registration started"}
+        return {"status": "register"}
 
-    # AI only unknown
+    # AI fallback only unknown
     reply = gemini_reply(text)
     send_text(sender, reply)
     return {"status": "ai"}
@@ -189,16 +205,13 @@ def handle_text(sender, text):
 # =====================================================
 
 def send_main_menu(phone):
-
-    navigation_sessions[phone] = "main"
-
     send_buttons(
         phone,
-        "SPJRS Temple Services\n\nChoose an option:",
+        "SPJRS Temple Services",
         [
-            {"type": "reply", "reply": {"id": "register", "title": "Register Devotee"}},
-            {"type": "reply", "reply": {"id": "info", "title": "Temple Info"}},
-            {"type": "reply", "reply": {"id": "seva", "title": "Seva Services"}}
+            {"type":"reply","reply":{"id":"register","title":"Register Devotee"}},
+            {"type":"reply","reply":{"id":"seva_booking","title":"Seva Booking"}},
+            {"type":"reply","reply":{"id":"accommodation_booking","title":"Accommodation"}},
         ]
     )
 
@@ -211,71 +224,94 @@ def handle_navigation(phone, selected_id):
     if selected_id == "register":
         start_registration(phone)
 
-    elif selected_id == "info":
-        send_buttons(
-            phone,
-            "Temple Information:",
-            [
-                {"type": "reply", "reply": {"id": "timings", "title": "Temple Timings"}},
-                {"type": "reply", "reply": {"id": "location", "title": "Location"}},
-                {"type": "reply", "reply": {"id": "go_back", "title": "↩ Go Back"}}
-            ]
-        )
+    elif selected_id == "seva_booking":
+        start_seva_booking(phone)
 
-    elif selected_id == "timings":
-        send_text(phone, "🕉 Morning: 5:00–12:30\nEvening: 3:00–7:00")
-        send_back_button(phone)
-
-    elif selected_id == "location":
-        send_text(phone, "📍 https://maps.google.com/?q=17.17491,79.21219")
-        send_back_button(phone)
-
-    elif selected_id == "seva":
-        send_buttons(
-            phone,
-            "Seva Services:",
-            [
-                {"type": "reply", "reply": {"id": "archana", "title": "Archana"}},
-                {"type": "reply", "reply": {"id": "abhishekam", "title": "Abhishekam"}},
-                {"type": "reply", "reply": {"id": "go_back", "title": "↩ Go Back"}}
-            ]
-        )
-
-    elif selected_id == "go_back":
-        send_main_menu(phone)
-
-    elif selected_id == "confirm_registration":
-        confirm_registration(phone)
-
-    elif selected_id == "cancel_registration":
-        registration_sessions.pop(phone, None)
-        send_text(phone, "Registration cancelled.")
-        send_main_menu(phone)
+    elif selected_id == "accommodation_booking":
+        start_accommodation_booking(phone)
 
     return {"status": "navigation"}
 
-def send_back_button(phone):
-    send_buttons(
-        phone,
-        "Choose next action:",
-        [{"type": "reply", "reply": {"id": "go_back", "title": "↩ Go Back"}}]
-    )
+# =====================================================
+# SEVA BOOKING FLOW
+# =====================================================
+
+def start_seva_booking(phone):
+
+    flow_sessions[phone] = {
+        "flow": "seva",
+        "step": "select_seva"
+    }
+
+    sevas = list(sevas_master.find({}, {"_id":0}))
+    if not sevas:
+        send_text(phone, "No sevas configured.")
+        return
+
+    buttons = [
+        {"type":"reply","reply":{"id":s["code"],"title":s["name"]}}
+        for s in sevas[:3]
+    ]
+
+    send_buttons(phone, "Select Seva:", buttons)
+
+def handle_booking_flow(phone, text):
+
+    session = flow_sessions[phone]
+
+    if session["flow"] == "seva":
+
+        if session["step"] == "select_date":
+            session["date"] = text
+            confirm_seva_booking(phone)
+
+def confirm_seva_booking(phone):
+
+    session = flow_sessions[phone]
+    booking_id = generate_booking_id("SB")
+
+    seva_bookings.insert_one({
+        "booking_id": booking_id,
+        "phone": phone,
+        "seva": session["seva"],
+        "booking_date": session["date"],
+        "created_at": datetime.utcnow()
+    })
+
+    flow_sessions.pop(phone)
+    send_text(phone, f"Seva booked successfully!\nBooking ID: {booking_id}")
+    send_main_menu(phone)
 
 # =====================================================
-# REGISTRATION (5 STEP)
+# ACCOMMODATION BOOKING FLOW
+# =====================================================
+
+def start_accommodation_booking(phone):
+
+    flow_sessions[phone] = {
+        "flow": "accommodation",
+        "step": "select_room"
+    }
+
+    rooms = list(accommodation_master.find({}, {"_id":0}))
+    if not rooms:
+        send_text(phone, "No rooms configured.")
+        return
+
+    buttons = [
+        {"type":"reply","reply":{"id":r["code"],"title":r["name"]}}
+        for r in rooms[:3]
+    ]
+
+    send_buttons(phone, "Select Room Type:", buttons)
+
+# =====================================================
+# REGISTRATION
 # =====================================================
 
 def start_registration(phone):
-
-    existing = devotees.find_one({"phone": phone})
-
-    if existing and existing.get("registration_status") == "active":
-        send_text(phone, "🙏 You are already registered.")
-        send_main_menu(phone)
-        return
-
     registration_sessions[phone] = {"step": "name"}
-    send_text(phone, "🙏 Please enter your Full Name:")
+    send_text(phone, "Enter Full Name:")
 
 def handle_registration(phone, text):
 
@@ -283,82 +319,26 @@ def handle_registration(phone, text):
     step = session["step"]
 
     if step == "name":
-        session["full_name"] = text
-        session["step"] = "gotram"
-        send_text(phone, "Enter Gotram (or type 'no'):")
-        return
-
-    if step == "gotram":
-        session["gotram"] = text if text.lower() != "no" else "Not Provided"
-        session["step"] = "address"
-        send_text(phone, "Enter Address (or type 'no'):")
-        return
-
-    if step == "address":
-        session["address"] = text if text.lower() != "no" else "Not Provided"
-        session["step"] = "mobile"
-        send_text(phone, "Enter Mobile Number:")
-        return
-
-    if step == "mobile":
-        session["mobile"] = text
-        session["step"] = "email"
-        send_text(phone, "Enter Email (or type 'no'):")
-        return
-
-    if step == "email":
-        session["email"] = text if text.lower() != "no" else "Not Provided"
+        session["name"] = text
         session["step"] = "confirm"
-
         send_buttons(
             phone,
-            f"Confirm registration for {session['full_name']}?",
+            f"Confirm registration for {text}?",
             [
-                {"type": "reply", "reply": {"id": "confirm_registration", "title": "✅ Confirm"}},
-                {"type": "reply", "reply": {"id": "cancel_registration", "title": "❌ Cancel"}}
+                {"type":"reply","reply":{"id":"confirm_reg","title":"Confirm"}},
+                {"type":"reply","reply":{"id":"cancel_reg","title":"Cancel"}}
             ]
         )
 
-def confirm_registration(phone):
-
-    session = registration_sessions.get(phone)
-    if not session:
-        send_text(phone, "Session expired.")
-        send_main_menu(phone)
-        return
-
-    devotees.update_one(
-        {"phone": phone},
-        {
-            "$set": {
-                "phone": phone,
-                "full_name": session["full_name"],
-                "gotram": session["gotram"],
-                "address": session["address"],
-                "mobile_number": session["mobile"],
-                "email": session["email"],
-                "registration_status": "active",
-                "registered_at": datetime.utcnow()
-            }
-        },
-        upsert=True
-    )
-
-    registration_sessions.pop(phone, None)
-    send_text(phone, "🙏 Registration successful!")
-    send_main_menu(phone)
-
 # =====================================================
-# GEMINI AI
+# GEMINI
 # =====================================================
 
 def gemini_reply(text):
-
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
         data = {"contents":[{"parts":[{"text":f"You are temple assistant.\nUser: {text}"}]}]}
         response = requests.post(url, json=data)
-        result = response.json()
-        return result["candidates"][0]["content"]["parts"][0]["text"]
+        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
     except:
-        return "🙏 Please try again."
+        return "Please try again."
