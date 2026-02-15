@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 from pymongo import MongoClient, ReturnDocument
 from datetime import datetime
@@ -11,7 +11,6 @@ import logging
 # =====================================================
 
 app = FastAPI()
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TempleBot")
 
@@ -38,11 +37,10 @@ client = MongoClient(MONGODB_URI)
 db = client["sohum_db"]
 
 devotees = db["devotees"]
-sevas_master = db["sevas_master"]
-accommodation_master = db["accommodation_master"]
 seva_bookings = db["seva_bookings"]
 accommodation_bookings = db["accommodation_bookings"]
 counters = db["counters"]
+festival_config = db["festival_config"]
 
 devotees.create_index("phone", unique=True)
 
@@ -63,23 +61,23 @@ def normalize_phone(phone):
         phone = "91" + phone
     return phone
 
-def get_headers():
+def headers():
     return {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }
 
 def send_text(phone, message):
-    data = {
+    payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "text",
         "text": {"body": message}
     }
-    requests.post(GRAPH_URL, headers=get_headers(), json=data)
+    requests.post(GRAPH_URL, headers=headers(), json=payload)
 
 def send_buttons(phone, text, buttons):
-    data = {
+    payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "interactive",
@@ -89,51 +87,38 @@ def send_buttons(phone, text, buttons):
             "action": {"buttons": buttons}
         }
     }
-    requests.post(GRAPH_URL, headers=get_headers(), json=data)
+    requests.post(GRAPH_URL, headers=headers(), json=payload)
 
-# =====================================================
-# BOOKING ID ENGINE
-# =====================================================
+def btn(id, title):
+    return {"type": "reply", "reply": {"id": id, "title": title}}
 
 def generate_booking_id(prefix):
-
     timestamp = datetime.utcnow().strftime("%Y%m%d%H%M")
-
-    counter_doc = counters.find_one_and_update(
+    counter = counters.find_one_and_update(
         {"_id": prefix},
         {"$inc": {"seq": 1}},
         upsert=True,
         return_document=ReturnDocument.AFTER
     )
+    return f"SPJRS-{prefix}-{timestamp}-{counter['seq']:04d}"
 
-    seq = counter_doc["seq"]
-    return f"SPJRSD-{prefix}-{timestamp}-{seq:04d}"
+def get_user(phone):
+    return devotees.find_one({"phone": phone})
+
+def set_language(phone, lang):
+    devotees.update_one(
+        {"phone": phone},
+        {"$set": {"phone": phone, "language": lang}},
+        upsert=True
+    )
 
 # =====================================================
 # HEALTH
 # =====================================================
 
 @app.api_route("/", methods=["GET", "HEAD"])
-async def health_check():
+async def health():
     return {"status": "alive"}
-    
-# =====================================================
-# ADMIN
-# =====================================================
-
-@app.get("/admin/bookings/seva")
-async def list_seva_bookings(date: str = None):
-    query = {}
-    if date:
-        query["booking_date"] = date
-    return list(seva_bookings.find(query, {"_id": 0}))
-
-@app.get("/admin/bookings/accommodation")
-async def list_accommodation_bookings(date: str = None):
-    query = {}
-    if date:
-        query["booking_date"] = date
-    return list(accommodation_bookings.find(query, {"_id": 0}))
 
 # =====================================================
 # WEBHOOK VERIFY
@@ -174,46 +159,78 @@ async def webhook(request: Request):
     return {"status": "ok"}
 
 # =====================================================
-# TEXT HANDLER
+# LANGUAGE SELECTION
 # =====================================================
 
-def handle_text(sender, text):
-
-    if sender in registration_sessions:
-        handle_registration(sender, text)
-        return {"status": "registration"}
-
-    if sender in flow_sessions:
-        handle_booking_flow(sender, text)
-        return {"status": "flow"}
-
-    if text.lower() in ["hi", "hello", "menu", "start"]:
-        send_main_menu(sender)
-        return {"status": "menu"}
-
-    if text.lower() == "register":
-        start_registration(sender)
-        return {"status": "register"}
-
-    # AI fallback only unknown
-    reply = gemini_reply(text)
-    send_text(sender, reply)
-    return {"status": "ai"}
+def send_language_selection(phone):
+    send_buttons(
+        phone,
+        "Om Namah Shivaya 🙏\nPlease choose your language:\nదయచేసి మీ భాషను ఎంచుకోండి:",
+        [
+            btn("lang_en", "English 🇬🇧"),
+            btn("lang_tel", "తెలుగు 🇮🇳")
+        ]
+    )
 
 # =====================================================
 # MAIN MENU
 # =====================================================
 
 def send_main_menu(phone):
-    send_buttons(
-        phone,
-        "SPJRS Temple Services",
-        [
-            {"type":"reply","reply":{"id":"register","title":"Register Devotee"}},
-            {"type":"reply","reply":{"id":"seva_booking","title":"Seva Booking"}},
-            {"type":"reply","reply":{"id":"accommodation_booking","title":"Accommodation"}},
+
+    user = get_user(phone)
+    lang = user.get("language", "en") if user else "en"
+
+    # Festival banner
+    festival = festival_config.find_one({"active": True})
+    if festival:
+        send_text(phone, festival.get("message"))
+
+    if lang == "tel":
+        text = "మెయిన్ మెనూ ఎంపిక చేయండి:"
+        buttons = [
+            btn("darshan","🕉️ దర్శన సమయాలు"),
+            btn("seva","🙏 పూజా బుకింగ్"),
+            btn("accommodation","🏠 వసతి"),
         ]
-    )
+    else:
+        text = "Please choose a service:"
+        buttons = [
+            btn("darshan","🕉️ Darshan & Timings"),
+            btn("seva","🙏 Seva Booking"),
+            btn("accommodation","🏠 Accommodation"),
+        ]
+
+    send_buttons(phone, text, buttons)
+
+# =====================================================
+# TEXT HANDLER
+# =====================================================
+
+def handle_text(sender, text):
+
+    lower = text.lower()
+
+    if sender in registration_sessions:
+        handle_registration(sender, text)
+        return {"status":"registration"}
+
+    if sender in flow_sessions:
+        handle_booking_flow(sender, text)
+        return {"status":"flow"}
+
+    if lower in ["hi","hello","start","namaste"]:
+        send_language_selection(sender)
+        return {"status":"lang"}
+
+    if lower == "menu":
+        send_main_menu(sender)
+        return {"status":"menu"}
+
+    # AI fallback only unknown
+    reply = gemini_reply(text)
+    send_text(sender, reply)
+    return {"status":"ai"}
 
 # =====================================================
 # NAVIGATION
@@ -221,39 +238,32 @@ def send_main_menu(phone):
 
 def handle_navigation(phone, selected_id):
 
-    if selected_id == "register":
-        start_registration(phone)
+    if selected_id == "lang_en":
+        set_language(phone,"en")
+        send_main_menu(phone)
 
-    elif selected_id == "seva_booking":
+    elif selected_id == "lang_tel":
+        set_language(phone,"tel")
+        send_main_menu(phone)
+
+    elif selected_id == "darshan":
+        send_text(phone,"Morning 06:00–12:30\nEvening 05:00–08:30\n\nType menu.")
+
+    elif selected_id == "seva":
         start_seva_booking(phone)
 
-    elif selected_id == "accommodation_booking":
+    elif selected_id == "accommodation":
         start_accommodation_booking(phone)
 
-    return {"status": "navigation"}
+    return {"status":"nav"}
 
 # =====================================================
 # SEVA BOOKING FLOW
 # =====================================================
 
 def start_seva_booking(phone):
-
-    flow_sessions[phone] = {
-        "flow": "seva",
-        "step": "select_seva"
-    }
-
-    sevas = list(sevas_master.find({}, {"_id":0}))
-    if not sevas:
-        send_text(phone, "No sevas configured.")
-        return
-
-    buttons = [
-        {"type":"reply","reply":{"id":s["code"],"title":s["name"]}}
-        for s in sevas[:3]
-    ]
-
-    send_buttons(phone, "Select Seva:", buttons)
+    flow_sessions[phone] = {"flow":"seva","step":"seva_name"}
+    send_text(phone,"Enter Seva Name:")
 
 def handle_booking_flow(phone, text):
 
@@ -261,84 +271,114 @@ def handle_booking_flow(phone, text):
 
     if session["flow"] == "seva":
 
-        if session["step"] == "select_date":
+        if session["step"] == "seva_name":
+            session["seva"] = text
+            session["step"] = "date"
+            send_text(phone,"Enter Booking Date (YYYY-MM-DD):")
+
+        elif session["step"] == "date":
             session["date"] = text
-            confirm_seva_booking(phone)
+            booking_id = generate_booking_id("SB")
 
-def confirm_seva_booking(phone):
+            seva_bookings.insert_one({
+                "booking_id": booking_id,
+                "phone": phone,
+                "seva": session["seva"],
+                "booking_date": session["date"],
+                "created_at": datetime.utcnow()
+            })
 
-    session = flow_sessions[phone]
-    booking_id = generate_booking_id("SB")
-
-    seva_bookings.insert_one({
-        "booking_id": booking_id,
-        "phone": phone,
-        "seva": session["seva"],
-        "booking_date": session["date"],
-        "created_at": datetime.utcnow()
-    })
-
-    flow_sessions.pop(phone)
-    send_text(phone, f"Seva booked successfully!\nBooking ID: {booking_id}")
-    send_main_menu(phone)
+            flow_sessions.pop(phone)
+            send_text(phone,f"Seva booked successfully!\nBooking ID: {booking_id}")
+            send_main_menu(phone)
 
 # =====================================================
-# ACCOMMODATION BOOKING FLOW
+# ACCOMMODATION FLOW
 # =====================================================
 
 def start_accommodation_booking(phone):
-
-    flow_sessions[phone] = {
-        "flow": "accommodation",
-        "step": "select_room"
-    }
-
-    rooms = list(accommodation_master.find({}, {"_id":0}))
-    if not rooms:
-        send_text(phone, "No rooms configured.")
-        return
-
-    buttons = [
-        {"type":"reply","reply":{"id":r["code"],"title":r["name"]}}
-        for r in rooms[:3]
-    ]
-
-    send_buttons(phone, "Select Room Type:", buttons)
+    flow_sessions[phone] = {"flow":"acc","step":"room_type"}
+    send_text(phone,"Enter Room Type (Non-AC / AC / Dormitory):")
 
 # =====================================================
-# REGISTRATION
+# 5-STEP REGISTRATION
 # =====================================================
 
 def start_registration(phone):
-    registration_sessions[phone] = {"step": "name"}
-    send_text(phone, "Enter Full Name:")
+
+    existing = get_user(phone)
+    if existing and existing.get("registration_status") == "active":
+        send_text(phone,"You are already registered.")
+        return
+
+    registration_sessions[phone] = {"step":"name"}
+    send_text(phone,"Enter Full Name:")
 
 def handle_registration(phone, text):
 
     session = registration_sessions[phone]
-    step = session["step"]
 
-    if step == "name":
+    if session["step"] == "name":
         session["name"] = text
-        session["step"] = "confirm"
-        send_buttons(
-            phone,
-            f"Confirm registration for {text}?",
-            [
-                {"type":"reply","reply":{"id":"confirm_reg","title":"Confirm"}},
-                {"type":"reply","reply":{"id":"cancel_reg","title":"Cancel"}}
-            ]
-        )
+        session["step"] = "gotram"
+        send_text(phone,"Enter Gotram:")
+        return
+
+    if session["step"] == "gotram":
+        session["gotram"] = text
+        session["step"] = "address1"
+        send_text(phone,"Enter House No & Street:")
+        return
+
+    if session["step"] == "address1":
+        session["address1"] = text
+        session["step"] = "city"
+        send_text(phone,"Enter City:")
+        return
+
+    if session["step"] == "city":
+        session["city"] = text
+        session["step"] = "state"
+        send_text(phone,"Enter State:")
+        return
+
+    if session["step"] == "state":
+        session["state"] = text
+        session["step"] = "pincode"
+        send_text(phone,"Enter Pincode:")
+        return
+
+    if session["step"] == "pincode":
+
+        devotees.insert_one({
+            "phone": phone,
+            "full_name": session["name"],
+            "gotram": session["gotram"],
+            "address": {
+                "line1": session["address1"],
+                "city": session["city"],
+                "state": session["state"],
+                "pincode": text
+            },
+            "registration_status":"active",
+            "registered_at": datetime.utcnow()
+        })
+
+        registration_sessions.pop(phone)
+        send_text(phone,"Registration completed successfully.")
+        send_main_menu(phone)
 
 # =====================================================
-# GEMINI
+# GEMINI FALLBACK
 # =====================================================
 
 def gemini_reply(text):
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
-        data = {"contents":[{"parts":[{"text":f"You are temple assistant.\nUser: {text}"}]}]}
-        response = requests.post(url, json=data)
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
+        payload = {
+            "contents":[{"parts":[{"text":f"You are temple assistant.\nUser: {text}"}]}]
+        }
+        r = requests.post(url, json=payload)
+        return r.json()["candidates"][0]["content"]["parts"][0]["text"]
     except:
-        return "Please try again."
+        return "Please type 'menu' to continue."
