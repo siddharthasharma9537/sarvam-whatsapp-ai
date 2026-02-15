@@ -113,10 +113,10 @@ def generate_booking_id(prefix):
 # HEALTH
 # =====================================================
 
-@app.get("/")
-async def health():
+@app.api_route("/", methods=["GET", "HEAD"])
+async def health_check():
     return {"status": "alive"}
-
+    
 # =====================================================
 # ADMIN
 # =====================================================
