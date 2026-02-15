@@ -1,37 +1,38 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from pymongo import MongoClient
 from datetime import datetime
 import requests
 import os
+import logging
+
+# =====================================================
+# APP INIT
+# =====================================================
 
 app = FastAPI()
 
 # =====================================================
-# HEALTH CHECK
+# LOGGING
 # =====================================================
 
-@app.get("/")
-async def health_check():
-    return {"status": "alive"}
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("TempleBot")
 
 # =====================================================
-# CONFIG
+# ENV CONFIG
 # =====================================================
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MONGODB_URI = os.getenv("MONGODB_URI")
 
+if not all([VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, GEMINI_API_KEY, MONGODB_URI]):
+    raise Exception("One or more environment variables missing.")
+
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-
-if not MONGODB_URI:
-    raise Exception("MONGODB_URI not set")
-
 
 # =====================================================
 # DATABASE
@@ -39,24 +40,42 @@ if not MONGODB_URI:
 
 client = MongoClient(MONGODB_URI)
 db = client["sohum_db"]
-devotees_collection = db["devotees"]
+devotees = db["devotees"]
 
-try:
-    devotees_collection.create_index("phone", unique=True)
-except:
-    pass
-
+devotees.create_index("phone", unique=True)
 
 # =====================================================
-# TEMP STORES
+# SESSION STORES
 # =====================================================
 
 registration_sessions = {}
-menu_sessions = {}
-
+navigation_sessions = {}
 
 # =====================================================
-# PHONE NORMALIZER
+# HEALTH CHECK
+# =====================================================
+
+@app.get("/")
+async def health():
+    return {"status": "alive"}
+
+# =====================================================
+# ADMIN APIs
+# =====================================================
+
+@app.get("/admin/devotees")
+async def list_devotees():
+    return list(devotees.find({}, {"_id": 0}))
+
+@app.get("/admin/devotee/{phone}")
+async def get_devotee(phone: str):
+    user = devotees.find_one({"phone": phone}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="Devotee not found")
+    return user
+
+# =====================================================
+# UTILITIES
 # =====================================================
 
 def normalize_phone(phone: str):
@@ -65,22 +84,44 @@ def normalize_phone(phone: str):
         phone = "91" + phone
     return phone
 
+def send_text(phone, message):
+    data = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "text",
+        "text": {"body": message}
+    }
+    requests.post(GRAPH_URL, headers=get_headers(), json=data)
+
+def send_buttons(phone, body_text, buttons):
+    data = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "interactive",
+        "interactive": {
+            "type": "button",
+            "body": {"text": body_text},
+            "action": {"buttons": buttons}
+        }
+    }
+    requests.post(GRAPH_URL, headers=get_headers(), json=data)
+
+def get_headers():
+    return {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
 # =====================================================
-# WEBHOOK VERIFICATION
+# WEBHOOK VERIFY
 # =====================================================
 
 @app.get("/webhook")
 async def verify(request: Request):
-    mode = request.query_params.get("hub.mode")
-    token = request.query_params.get("hub.verify_token")
-    challenge = request.query_params.get("hub.challenge")
-
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        return PlainTextResponse(challenge)
-
+    if request.query_params.get("hub.mode") == "subscribe" and \
+       request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
+        return PlainTextResponse(request.query_params.get("hub.challenge"))
     return PlainTextResponse("Verification failed", status_code=403)
-
 
 # =====================================================
 # MAIN WEBHOOK
@@ -89,334 +130,235 @@ async def verify(request: Request):
 @app.post("/webhook")
 async def webhook(request: Request):
 
-    data = await request.json()
-
     try:
-        entry = data.get("entry", [])[0]
-        change = entry.get("changes", [])[0]
-        value = change.get("value", {})
+        data = await request.json()
+        message = data["entry"][0]["changes"][0]["value"]["messages"][0]
 
-        if "messages" not in value:
-            return {"status": "no message"}
+        sender = normalize_phone(message["from"])
+        msg_type = message["type"]
 
-        message_obj = value["messages"][0]
-        sender = normalize_phone(message_obj.get("from"))
-        msg_type = message_obj.get("type")
-
-        # =========================
-        # TEXT MESSAGE
-        # =========================
+        logger.info(f"Incoming from {sender} - {msg_type}")
 
         if msg_type == "text":
+            text = message["text"]["body"].strip()
+            return handle_text(sender, text)
 
-            text = message_obj["text"]["body"].strip()
-            text_lower = text.lower()
-
-            # REGISTRATION FLOW
-            if sender in registration_sessions:
-                handle_registration(sender, text)
-                return {"status": "registration handled"}
-
-            # GREETING
-            if text_lower in ["hi", "hello", "namaskaram", "start", "menu"]:
-                send_main_menu(sender)
-                return {"status": "main menu shown"}
-
-            # REGISTER COMMAND
-            if text_lower == "register":
-                existing = devotees_collection.find_one({"phone": sender})
-                if existing and existing.get("registration_status") == "active":
-                    send_text(sender, "🙏 You are already registered.")
-                else:
-                    start_registration(sender)
-                return {"status": "register handled"}
-
-            # UNKNOWN → AI FALLBACK
-            reply = gemini_reply(text)
-            send_text(sender, reply)
-
-        # =========================
-        # INTERACTIVE
-        # =========================
-
-        elif msg_type == "interactive":
-
-            interactive = message_obj.get("interactive", {})
+        if msg_type == "interactive":
+            interactive = message["interactive"]
             selected_id = None
 
-            if interactive.get("type") == "list_reply":
+            if interactive["type"] == "button_reply":
+                selected_id = interactive["button_reply"]["id"]
+            if interactive["type"] == "list_reply":
                 selected_id = interactive["list_reply"]["id"]
 
-            elif interactive.get("type") == "button_reply":
-                selected_id = interactive["button_reply"]["id"]
-
-            handle_menu_selection(sender, selected_id)
-
-        # =========================
-        # AUDIO
-        # =========================
-
-        elif msg_type == "audio":
-
-            media_id = message_obj["audio"]["id"]
-            transcript = speech_to_text(media_id)
-
-            if transcript:
-                reply = gemini_reply(transcript)
-            else:
-                reply = "🙏 Sorry, I could not understand the voice message."
-
-            send_text(sender, reply)
+            return handle_navigation(sender, selected_id)
 
     except Exception as e:
-        print("Webhook error:", e)
+        logger.error(f"Webhook error: {e}")
 
     return {"status": "ok"}
 
+# =====================================================
+# TEXT HANDLER
+# =====================================================
+
+def handle_text(sender, text):
+
+    text_lower = text.lower()
+
+    if sender in registration_sessions:
+        handle_registration(sender, text)
+        return {"status": "registration flow"}
+
+    if text_lower in ["hi", "hello", "start", "menu"]:
+        send_main_menu(sender)
+        return {"status": "menu"}
+
+    if text_lower == "register":
+        start_registration(sender)
+        return {"status": "registration started"}
+
+    # AI only unknown
+    reply = gemini_reply(text)
+    send_text(sender, reply)
+    return {"status": "ai"}
 
 # =====================================================
-# STRUCTURED NAVIGATION
+# MAIN MENU
 # =====================================================
 
 def send_main_menu(phone):
 
-    menu_sessions[phone] = {"level": "main"}
+    navigation_sessions[phone] = "main"
 
-    rows = [
-        {
-            "id": "l1_temple",
-            "title": "Temple Services",
-            "description": "Darshan Timings, Sevas, Events"
-        },
-        {
-            "id": "l1_devotee",
-            "title": "Devotee Services",
-            "description": "Register, Donations, My Details"
-        }
-    ]
-
-    send_list(phone, "☰ Main Menu", "Please choose a service:", rows)
-
-
-def send_level2_menu(phone, category):
-
-    menu_sessions[phone] = {"level": "level2", "parent": category}
-
-    if category == "l1_temple":
-        rows = [
-            {"id": "timings", "title": "Temple Timings", "description": "Daily Darshan Schedule"},
-            {"id": "location", "title": "Temple Location", "description": "Google Maps Location"},
+    send_buttons(
+        phone,
+        "SPJRS Temple Services\n\nChoose an option:",
+        [
+            {"type": "reply", "reply": {"id": "register", "title": "Register Devotee"}},
+            {"type": "reply", "reply": {"id": "info", "title": "Temple Info"}},
+            {"type": "reply", "reply": {"id": "seva", "title": "Seva Services"}}
         ]
+    )
 
-    elif category == "l1_devotee":
-        rows = [
-            {"id": "register", "title": "Register Devotee", "description": "Join Temple Records"},
-            {"id": "donate", "title": "Donate", "description": "Support Temple Activities"},
-        ]
+# =====================================================
+# NAVIGATION
+# =====================================================
 
-    # Always add navigation rows
-    rows.append({"id": "go_back", "title": "↩ Go Back", "description": "Return to previous menu"})
-    rows.append({"id": "main_menu", "title": "☰ Main Menu", "description": "Return to main menu"})
-
-    send_list(phone, "Temple Services", "Select an option:", rows)
-
-
-def handle_menu_selection(phone, selected_id):
-
-    if not selected_id:
-        return
-
-    if selected_id == "main_menu":
-        send_main_menu(phone)
-        return
-
-    if selected_id == "go_back":
-        send_main_menu(phone)
-        return
-
-    if selected_id.startswith("l1_"):
-        send_level2_menu(phone, selected_id)
-        return
-
-    # LEVEL 2 ACTIONS
-    if selected_id == "timings":
-        send_text(phone, "🕉 Morning: 5:00–12:30\nEvening: 3:00–7:00")
-        return
-
-    if selected_id == "location":
-        send_text(phone, "📍 https://maps.google.com/?q=17.17491,79.21219")
-        return
+def handle_navigation(phone, selected_id):
 
     if selected_id == "register":
         start_registration(phone)
-        return
 
-    if selected_id == "donate":
-        send_text(phone, "🙏 Donation link coming soon.")
-        return
+    elif selected_id == "info":
+        send_buttons(
+            phone,
+            "Temple Information:",
+            [
+                {"type": "reply", "reply": {"id": "timings", "title": "Temple Timings"}},
+                {"type": "reply", "reply": {"id": "location", "title": "Location"}},
+                {"type": "reply", "reply": {"id": "go_back", "title": "↩ Go Back"}}
+            ]
+        )
 
+    elif selected_id == "timings":
+        send_text(phone, "🕉 Morning: 5:00–12:30\nEvening: 3:00–7:00")
+        send_back_button(phone)
+
+    elif selected_id == "location":
+        send_text(phone, "📍 https://maps.google.com/?q=17.17491,79.21219")
+        send_back_button(phone)
+
+    elif selected_id == "seva":
+        send_buttons(
+            phone,
+            "Seva Services:",
+            [
+                {"type": "reply", "reply": {"id": "archana", "title": "Archana"}},
+                {"type": "reply", "reply": {"id": "abhishekam", "title": "Abhishekam"}},
+                {"type": "reply", "reply": {"id": "go_back", "title": "↩ Go Back"}}
+            ]
+        )
+
+    elif selected_id == "go_back":
+        send_main_menu(phone)
+
+    elif selected_id == "confirm_registration":
+        confirm_registration(phone)
+
+    elif selected_id == "cancel_registration":
+        registration_sessions.pop(phone, None)
+        send_text(phone, "Registration cancelled.")
+        send_main_menu(phone)
+
+    return {"status": "navigation"}
+
+def send_back_button(phone):
+    send_buttons(
+        phone,
+        "Choose next action:",
+        [{"type": "reply", "reply": {"id": "go_back", "title": "↩ Go Back"}}]
+    )
 
 # =====================================================
-# REGISTRATION FLOW
+# REGISTRATION (5 STEP)
 # =====================================================
 
 def start_registration(phone):
+
+    existing = devotees.find_one({"phone": phone})
+
+    if existing and existing.get("registration_status") == "active":
+        send_text(phone, "🙏 You are already registered.")
+        send_main_menu(phone)
+        return
+
     registration_sessions[phone] = {"step": "name"}
     send_text(phone, "🙏 Please enter your Full Name:")
 
-
 def handle_registration(phone, text):
 
-    user = registration_sessions.get(phone)
-    step = user["step"]
+    session = registration_sessions[phone]
+    step = session["step"]
 
     if step == "name":
-        user["full_name"] = text
-        user["step"] = "confirm"
-        send_text(phone, f"Confirm registration for {text}? Reply YES to confirm.")
+        session["full_name"] = text
+        session["step"] = "gotram"
+        send_text(phone, "Enter Gotram (or type 'no'):")
         return
 
-    if step == "confirm":
-        if text.lower() == "yes":
-            try:
-                devotees_collection.update_one(
-                    {"phone": phone},
-                    {"$set": {
-                        "phone": phone,
-                        "full_name": user["full_name"],
-                        "registration_status": "active",
-                        "registered_at": datetime.utcnow()
-                    }},
-                    upsert=True
-                )
-                send_text(phone, "🙏 Registration successful!")
-            except:
-                send_text(phone, "🙏 Already registered.")
-        else:
-            send_text(phone, "Registration cancelled.")
+    if step == "gotram":
+        session["gotram"] = text if text.lower() != "no" else "Not Provided"
+        session["step"] = "address"
+        send_text(phone, "Enter Address (or type 'no'):")
+        return
 
-        registration_sessions.pop(phone, None)
+    if step == "address":
+        session["address"] = text if text.lower() != "no" else "Not Provided"
+        session["step"] = "mobile"
+        send_text(phone, "Enter Mobile Number:")
+        return
 
+    if step == "mobile":
+        session["mobile"] = text
+        session["step"] = "email"
+        send_text(phone, "Enter Email (or type 'no'):")
+        return
 
-# =====================================================
-# LIST SENDER
-# =====================================================
+    if step == "email":
+        session["email"] = text if text.lower() != "no" else "Not Provided"
+        session["step"] = "confirm"
 
-def send_list(to, header, body, rows):
+        send_buttons(
+            phone,
+            f"Confirm registration for {session['full_name']}?",
+            [
+                {"type": "reply", "reply": {"id": "confirm_registration", "title": "✅ Confirm"}},
+                {"type": "reply", "reply": {"id": "cancel_registration", "title": "❌ Cancel"}}
+            ]
+        )
 
-    headers = get_headers()
+def confirm_registration(phone):
 
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "interactive",
-        "interactive": {
-            "type": "list",
-            "header": {"type": "text", "text": header},
-            "body": {"text": body},
-            "action": {
-                "button": "View Options",
-                "sections": [
-                    {
-                        "title": "Services",
-                        "rows": rows
-                    }
-                ]
+    session = registration_sessions.get(phone)
+    if not session:
+        send_text(phone, "Session expired.")
+        send_main_menu(phone)
+        return
+
+    devotees.update_one(
+        {"phone": phone},
+        {
+            "$set": {
+                "phone": phone,
+                "full_name": session["full_name"],
+                "gotram": session["gotram"],
+                "address": session["address"],
+                "mobile_number": session["mobile"],
+                "email": session["email"],
+                "registration_status": "active",
+                "registered_at": datetime.utcnow()
             }
-        }
-    }
+        },
+        upsert=True
+    )
 
-    requests.post(GRAPH_URL, headers=headers, json=data)
-
-
-# =====================================================
-# TEXT SENDER
-# =====================================================
-
-def send_text(to, message):
-    headers = get_headers()
-
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": message}
-    }
-
-    requests.post(GRAPH_URL, headers=headers, json=data)
-
+    registration_sessions.pop(phone, None)
+    send_text(phone, "🙏 Registration successful!")
+    send_main_menu(phone)
 
 # =====================================================
 # GEMINI AI
 # =====================================================
 
-def gemini_reply(user_message):
+def gemini_reply(text):
+
     try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
-
-        data = {
-            "contents": [{
-                "parts": [{"text": f"You are a temple assistant.\nUser: {user_message}"}]
-            }]
-        }
-
+        data = {"contents":[{"parts":[{"text":f"You are temple assistant.\nUser: {text}"}]}]}
         response = requests.post(url, json=data)
         result = response.json()
-
-        if "candidates" in result:
-            return result["candidates"][0]["content"]["parts"][0]["text"]
-
-        return "🙏 Please try again."
-
+        return result["candidates"][0]["content"]["parts"][0]["text"]
     except:
         return "🙏 Please try again."
-
-
-# =====================================================
-# SPEECH TO TEXT
-# =====================================================
-
-def speech_to_text(media_id):
-    try:
-        whatsapp_headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
-
-        media = requests.get(
-            f"https://graph.facebook.com/v18.0/{media_id}",
-            headers=whatsapp_headers
-        ).json()
-
-        audio_url = media["url"]
-
-        audio_data = requests.get(
-            audio_url,
-            headers=whatsapp_headers
-        ).content
-
-        stt_headers = {"api-subscription-key": SARVAM_API_KEY}
-
-        files = {"file": ("audio.ogg", audio_data, "audio/ogg")}
-
-        response = requests.post(
-            "https://api.sarvam.ai/v1/speech-to-text",
-            headers=stt_headers,
-            files=files
-        )
-
-        if response.status_code == 200:
-            return response.json().get("text", "")
-
-        return ""
-
-    except:
-        return ""
-
-
-# =====================================================
-# HEADERS
-# =====================================================
-
-def get_headers():
-    return {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
