@@ -8,7 +8,6 @@ import os
 import logging
 import hmac
 import hashlib
-import razorpay
 
 # =====================================================
 # APP INIT
@@ -26,16 +25,12 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 MONGODB_URI = os.getenv("MONGODB_URI")
+
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
-missing_vars = []
-
-if not all([
-    VERIFY_TOKEN, WHATSAPP_TOKEN,
-    PHONE_NUMBER_ID, MONGODB_URI
-]):
+if not all([VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, MONGODB_URI]):
     raise Exception("Missing core environment variables")
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
@@ -55,12 +50,14 @@ devotees.create_index("phone", unique=True)
 bookings.create_index("booking_id", unique=True)
 
 # =====================================================
-# RAZORPAY
+# RAZORPAY INIT (SAFE)
 # =====================================================
 
-razorpay_client = razorpay.Client(
-    auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
-)
+razorpay_client = None
+if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+    razorpay_client = razorpay.Client(
+        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
+    )
 
 # =====================================================
 # SESSION STORE
@@ -79,6 +76,7 @@ def normalize_phone(phone):
         phone = "91" + phone
     return phone
 
+
 def send_text(phone, message):
     data = {
         "messaging_product": "whatsapp",
@@ -90,6 +88,7 @@ def send_text(phone, message):
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }, json=data)
+
 
 def send_buttons(phone, text, buttons):
     data = {
@@ -106,6 +105,7 @@ def send_buttons(phone, text, buttons):
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }, json=data)
+
 
 def generate_booking_id(prefix):
     counter = counters.find_one_and_update(
@@ -125,7 +125,7 @@ async def health():
     return {"status": "alive"}
 
 # =====================================================
-# WEBHOOK VERIFY (WhatsApp)
+# WEBHOOK VERIFY
 # =====================================================
 
 @app.get("/webhook")
@@ -136,7 +136,7 @@ async def verify(request: Request):
     return PlainTextResponse("Verification failed", status_code=403)
 
 # =====================================================
-# MAIN WHATSAPP WEBHOOK
+# MAIN WEBHOOK
 # =====================================================
 
 @app.post("/webhook")
@@ -230,18 +230,22 @@ def send_main_menu(phone):
             ("change_lang","🌐 భాష మార్చండి")
         ]
 
-    buttons = [
-        {"type":"reply","reply":{"id":i,"title":t}}
-        for i,t in options[:3]
-    ]
-
-    send_buttons(phone, text, buttons)
+    # WhatsApp max 3 buttons per message
+    for i in range(0, len(options), 3):
+        batch = options[i:i+3]
+        buttons = [
+            {"type":"reply","reply":{"id":id,"title":title}}
+            for id,title in batch
+        ]
+        send_buttons(phone, text, buttons)
 
 # =====================================================
-# NAVIGATION
+# NAVIGATION ROUTER
 # =====================================================
 
 def handle_navigation(phone, selected):
+
+    logger.info(f"Button clicked: {selected}")
 
     if selected == "lang_en":
         language_sessions[phone] = "en"
@@ -257,22 +261,91 @@ def handle_navigation(phone, selected):
         send_language_selection(phone)
         return
 
+    if selected == "darshan":
+        send_darshan(phone)
+        return
+
+    if selected == "seva":
+        send_seva_menu(phone)
+        return
+
     if selected == "accommodation":
         start_accommodation_booking(phone)
+        return
+
+    if selected == "donation":
+        send_donation(phone)
+        return
+
+    if selected == "location":
+        send_location(phone)
+        return
+
+    if selected == "history":
+        send_history(phone)
+        return
+
+    if selected == "contact":
+        send_contact(phone)
+        return
+
+    if selected in ["room_nonac","room_ac","room_dorm"]:
+        handle_room_selection(phone, selected)
         return
 
     send_main_menu(phone)
 
 # =====================================================
-# ACCOMMODATION BOOKING (FULL FLOW)
+# MODULE FUNCTIONS
+# =====================================================
+
+def send_darshan(phone):
+    send_buttons(phone,
+        "☀ 06:00 AM – 12:30 PM\n🌙 05:00 PM – 08:30 PM",
+        [{"type":"reply","reply":{"id":"main_menu","title":"🔙 Main Menu"}}]
+    )
+
+def send_seva_menu(phone):
+    send_buttons(phone,
+        "Popular Sevas:",
+        [
+            {"type":"reply","reply":{"id":"seva_rudra","title":"Rudrabhishekam ₹200"}},
+            {"type":"reply","reply":{"id":"seva_kalyanam","title":"Kalyanotsavam ₹516"}},
+            {"type":"reply","reply":{"id":"main_menu","title":"🔙 Main Menu"}}
+        ]
+    )
+
+def send_donation(phone):
+    send_buttons(phone,
+        "Support Temple via UPI.",
+        [
+            {"type":"reply","reply":{"id":"main_menu","title":"🔙 Main Menu"}}
+        ]
+    )
+
+def send_location(phone):
+    send_buttons(phone,
+        "Cheruvugattu, Narketpally (5km), Nalgonda (18km)",
+        [{"type":"reply","reply":{"id":"main_menu","title":"🔙 Main Menu"}}]
+    )
+
+def send_history(phone):
+    send_buttons(phone,
+        "Swayambhu Lingam associated with Sage Parashurama.",
+        [{"type":"reply","reply":{"id":"main_menu","title":"🔙 Main Menu"}}]
+    )
+
+def send_contact(phone):
+    send_buttons(phone,
+        "Temple Office: 9390353848\n10 AM – 5 PM",
+        [{"type":"reply","reply":{"id":"main_menu","title":"🔙 Main Menu"}}]
+    )
+
+# =====================================================
+# ACCOMMODATION BOOKING
 # =====================================================
 
 def start_accommodation_booking(phone):
-
-    flow_sessions[phone] = {
-        "step": "room_type"
-    }
-
     send_buttons(
         phone,
         "Select Room Type:",
@@ -283,23 +356,38 @@ def start_accommodation_booking(phone):
         ]
     )
 
-# =====================================================
-# RAZORPAY PAYMENT LINK
-# =====================================================
+def handle_room_selection(phone, selected):
 
-def create_payment_link(amount, booking_id):
+    if not razorpay_client:
+        send_text(phone, "Payment system not configured.")
+        return
+
+    prices = {
+        "room_nonac": 300,
+        "room_ac": 800,
+        "room_dorm": 100
+    }
+
+    amount = prices[selected]
+    booking_id = generate_booking_id("AC")
+
+    bookings.insert_one({
+        "booking_id": booking_id,
+        "phone": phone,
+        "amount": amount,
+        "status": "pending",
+        "created_at": datetime.utcnow()
+    })
 
     payment = razorpay_client.payment_link.create({
         "amount": amount * 100,
         "currency": "INR",
         "description": "Temple Booking",
         "reference_id": booking_id,
-        "callback_url": "https://your-domain.com",
-        "callback_method": "get",
         "upi_link": True
     })
 
-    return payment["short_url"], payment["id"]
+    send_text(phone, f"Booking ID: {booking_id}\nPay here:\n{payment['short_url']}")
 
 # =====================================================
 # RAZORPAY WEBHOOK
@@ -318,13 +406,12 @@ async def razorpay_webhook(request: Request):
     ).hexdigest()
 
     if not hmac.compare_digest(expected, signature):
-        raise HTTPException(status_code=400, detail="Invalid signature")
+        raise HTTPException(status_code=400)
 
     payload = await request.json()
 
     if payload["event"] == "payment_link.paid":
-        payment = payload["payload"]["payment_link"]["entity"]
-        booking_id = payment["reference_id"]
+        booking_id = payload["payload"]["payment_link"]["entity"]["reference_id"]
 
         bookings.update_one(
             {"booking_id": booking_id},
@@ -332,24 +419,3 @@ async def razorpay_webhook(request: Request):
         )
 
     return {"status": "ok"}
-
-# =====================================================
-# REFUND
-# =====================================================
-
-@app.post("/admin/refund/{booking_id}")
-async def refund_booking(booking_id: str):
-
-    booking = bookings.find_one({"booking_id": booking_id})
-
-    if not booking:
-        raise HTTPException(status_code=404)
-
-    razorpay_client.payment.refund(booking["razorpay_payment_id"])
-
-    bookings.update_one(
-        {"booking_id": booking_id},
-        {"$set": {"status": "refunded"}}
-    )
-
-    return {"status": "refund initiated"}
