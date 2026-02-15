@@ -5,15 +5,9 @@ from datetime import datetime
 import requests
 import os
 import logging
+import razorpay
 import hmac
 import hashlib
-
-# Razorpay optional
-try:
-    import razorpay
-except:
-    razorpay = None
-
 
 # =====================================================
 # APP INIT
@@ -22,7 +16,6 @@ except:
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TempleBot")
-
 
 # =====================================================
 # ENV VARIABLES
@@ -42,7 +35,6 @@ if not all([VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, MONGODB_URI]):
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
 
-
 # =====================================================
 # DATABASE
 # =====================================================
@@ -57,17 +49,15 @@ counters = db["counters"]
 devotees.create_index("phone", unique=True)
 bookings.create_index("booking_id", unique=True)
 
-
 # =====================================================
-# OPTIONAL RAZORPAY INIT
+# RAZORPAY SAFE INIT
 # =====================================================
 
 razorpay_client = None
-if razorpay and RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
+if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
     razorpay_client = razorpay.Client(
         auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
     )
-
 
 # =====================================================
 # SESSION STORES
@@ -75,7 +65,7 @@ if razorpay and RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
 
 language_sessions = {}
 registration_sessions = {}
-
+flow_sessions = {}
 
 # =====================================================
 # UTILITIES
@@ -88,13 +78,6 @@ def normalize_phone(phone):
     return phone
 
 
-def get_headers():
-    return {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-
 def send_text(phone, message):
     data = {
         "messaging_product": "whatsapp",
@@ -102,25 +85,33 @@ def send_text(phone, message):
         "type": "text",
         "text": {"body": message}
     }
-    requests.post(GRAPH_URL, headers=get_headers(), json=data)
+    requests.post(GRAPH_URL, headers={
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }, json=data)
 
 
-def send_list(phone, header, body, button_text, sections):
+def send_list(phone, text, rows):
     data = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "interactive",
         "interactive": {
             "type": "list",
-            "header": {"type": "text", "text": header},
-            "body": {"text": body},
+            "body": {"text": text},
             "action": {
-                "button": button_text,
-                "sections": sections
+                "button": "Select Option",
+                "sections": [{
+                    "title": "Services",
+                    "rows": rows
+                }]
             }
         }
     }
-    requests.post(GRAPH_URL, headers=get_headers(), json=data)
+    requests.post(GRAPH_URL, headers={
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }, json=data)
 
 
 def generate_booking_id(prefix):
@@ -132,31 +123,16 @@ def generate_booking_id(prefix):
     )
     return f"SPJRSD-{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M')}-{counter['seq']:04d}"
 
-
 # =====================================================
-# HEALTH CHECK
+# HEALTH
 # =====================================================
 
 @app.api_route("/", methods=["GET", "HEAD"])
-async def root_health():
-    return {
-        "status": "alive",
-        "service": "Temple WhatsApp Bot",
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-
-@app.get("/health")
 async def health():
-    try:
-        client.admin.command("ping")
-        return {"status": "healthy"}
-    except:
-        return {"status": "db_error"}
-
+    return {"status": "alive"}
 
 # =====================================================
-# WEBHOOK VERIFY
+# WHATSAPP VERIFY
 # =====================================================
 
 @app.get("/webhook")
@@ -165,7 +141,6 @@ async def verify(request: Request):
        request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
         return PlainTextResponse(request.query_params.get("hub.challenge"))
     return PlainTextResponse("Verification failed", status_code=403)
-
 
 # =====================================================
 # MAIN WEBHOOK
@@ -185,13 +160,7 @@ async def webhook(request: Request):
             return handle_text(sender, message["text"]["body"].strip())
 
         if msg_type == "interactive":
-            interactive = message["interactive"]
-
-            if interactive["type"] == "list_reply":
-                selected = interactive["list_reply"]["id"]
-            else:
-                selected = interactive["button_reply"]["id"]
-
+            selected = message["interactive"]["list_reply"]["id"]
             return handle_navigation(sender, selected)
 
     except Exception as e:
@@ -199,101 +168,72 @@ async def webhook(request: Request):
 
     return {"status": "ok"}
 
-
 # =====================================================
 # TEXT HANDLER
 # =====================================================
 
 def handle_text(sender, text):
 
-    text_lower = text.lower()
-
     if sender in registration_sessions:
         return handle_registration(sender, text)
 
-    if text_lower in ["hi", "hello", "namaste", "start"]:
+    if text.lower() in ["hi", "hello", "namaste", "start"]:
         send_language_selection(sender)
         return {"status": "language"}
 
+    if text.lower().startswith("status"):
+        parts = text.split(" ")
+        if len(parts) < 2:
+            send_text(sender, "Please enter booking ID.")
+            return
+        booking = bookings.find_one({"booking_id": parts[1]})
+        if booking:
+            send_text(sender, f"Status: {booking['status']}")
+        else:
+            send_text(sender, "Booking not found.")
+        return
+
     send_text(sender, "Please use menu options.")
     return {"status": "unknown"}
-
 
 # =====================================================
 # LANGUAGE SELECTION
 # =====================================================
 
 def send_language_selection(phone):
-
-    send_list(
-        phone,
-        "Om Namah Shivaya 🙏",
-        "Choose Language / భాష ఎంచుకోండి:",
-        "Select",
-        [{
-            "title": "Language",
-            "rows": [
-                {"id": "lang_en", "title": "English 🇬🇧"},
-                {"id": "lang_tel", "title": "తెలుగు 🇮🇳"}
-            ]
-        }]
+    send_list(phone,
+        "Om Namah Shivaya 🙏\nChoose Language:",
+        [
+            {"id":"lang_en","title":"English 🇬🇧"},
+            {"id":"lang_tel","title":"తెలుగు 🇮🇳"}
+        ]
     )
 
-
 # =====================================================
-# MAIN MENU (LIST BASED)
+# MAIN MENU
 # =====================================================
 
 def send_main_menu(phone):
 
-    lang = language_sessions.get(phone, "en")
-
-    if lang == "en":
-        header = "Temple Services"
-        body = "Please select a service:"
-        rows = [
-            {"id":"register","title":"Register Devotee"},
-            {"id":"darshan","title":"Darshan & Timings"},
-            {"id":"accommodation","title":"Accommodation"},
-            {"id":"donation","title":"Donations"},
-            {"id":"location","title":"Location"},
-            {"id":"history","title":"Temple History"},
-            {"id":"contact","title":"Contact Office"},
-            {"id":"change_lang","title":"Change Language"}
+    send_list(phone,
+        "Main Menu:",
+        [
+            {"id":"register","title":"📝 Register Devotee"},
+            {"id":"darshan","title":"🕉 Darshan & Timings"},
+            {"id":"accommodation","title":"🏠 Accommodation"},
+            {"id":"donation","title":"💰 Donation"},
+            {"id":"location","title":"📍 Location"},
+            {"id":"history","title":"📜 History"},
+            {"id":"contact","title":"📞 Contact"},
+            {"id":"change_lang","title":"🌐 Change Language"}
         ]
-    else:
-        header = "ఆలయ సేవలు"
-        body = "సేవను ఎంచుకోండి:"
-        rows = [
-            {"id":"register","title":"భక్తుని నమోదు"},
-            {"id":"darshan","title":"దర్శన సమయాలు"},
-            {"id":"accommodation","title":"వసతి"},
-            {"id":"donation","title":"విరాళం"},
-            {"id":"location","title":"మార్గం"},
-            {"id":"history","title":"క్షేత్ర పురాణం"},
-            {"id":"contact","title":"సంప్రదించండి"},
-            {"id":"change_lang","title":"భాష మార్చండి"}
-        ]
-
-    send_list(
-        phone,
-        header,
-        body,
-        "View Menu",
-        [{
-            "title": "Main Menu",
-            "rows": rows
-        }]
     )
-
 
 # =====================================================
 # NAVIGATION ROUTER
 # =====================================================
 
 def handle_navigation(phone, selected):
-
-    logger.info(f"Selected: {selected}")
 
     if selected == "lang_en":
         language_sessions[phone] = "en"
@@ -314,17 +254,17 @@ def handle_navigation(phone, selected):
         return
 
     if selected == "darshan":
-        send_text(phone, "Morning: 06:00–12:30\nEvening: 05:00–08:30")
+        send_text(phone, "☀ 06:00 AM – 12:30 PM\n🌙 05:00 PM – 08:30 PM")
         send_main_menu(phone)
         return
 
     if selected == "accommodation":
-        send_text(phone, "Rooms:\nNon-AC ₹300\nAC ₹800\nDorm ₹100")
+        send_text(phone, "Accommodation booking coming soon.")
         send_main_menu(phone)
         return
 
     if selected == "donation":
-        send_text(phone, "Support Annadanam via UPI.")
+        send_text(phone, "UPI Donations coming soon.")
         send_main_menu(phone)
         return
 
@@ -343,51 +283,79 @@ def handle_navigation(phone, selected):
         send_main_menu(phone)
         return
 
-    send_main_menu(phone)
-
-
 # =====================================================
-# REGISTRATION FLOW
+# 5 STAGE REGISTRATION
 # =====================================================
 
 def start_registration(phone):
-    registration_sessions[phone] = {"step": "name"}
+
+    if devotees.find_one({"phone": phone}):
+        send_text(phone, "🙏 You are already registered.")
+        send_main_menu(phone)
+        return
+
+    registration_sessions[phone] = {"step":"name","data":{}}
     send_text(phone, "Enter Full Name:")
 
 
 def handle_registration(phone, text):
 
     session = registration_sessions[phone]
+    step = session["step"]
+    data = session["data"]
 
-    if session["step"] == "name":
+    if step == "name":
+        data["name"] = text
+        session["step"] = "gotram"
+        send_text(phone, "Enter Gotram (or type no):")
+        return
 
-        devotees.update_one(
-            {"phone": phone},
-            {"$set": {
-                "phone": phone,
-                "full_name": text,
-                "registered_at": datetime.utcnow()
-            }},
-            upsert=True
-        )
+    if step == "gotram":
+        data["gotram"] = text if text.lower()!="no" else "Not Provided"
+        session["step"] = "address"
+        send_text(phone, "Enter Address:")
+        return
+
+    if step == "address":
+        data["address"] = text
+        session["step"] = "mobile"
+        send_text(phone, "Enter Mobile:")
+        return
+
+    if step == "mobile":
+        data["mobile"] = text
+        session["step"] = "email"
+        send_text(phone, "Enter Email (or type no):")
+        return
+
+    if step == "email":
+        data["email"] = text if text.lower()!="no" else "Not Provided"
+
+        devotees.insert_one({
+            "phone": phone,
+            "full_name": data["name"],
+            "gotram": data["gotram"],
+            "address": data["address"],
+            "mobile": data["mobile"],
+            "email": data["email"],
+            "registered_at": datetime.utcnow()
+        })
 
         registration_sessions.pop(phone)
 
-        send_text(phone, "Registration successful 🙏")
+        send_text(phone, "🎉 Registration Successful!")
         send_main_menu(phone)
-
-    return {"status": "registered"}
-
+        return
 
 # =====================================================
-# RAZORPAY WEBHOOK (SAFE)
+# RAZORPAY WEBHOOK
 # =====================================================
 
 @app.post("/razorpay/webhook")
 async def razorpay_webhook(request: Request):
 
     if not RAZORPAY_WEBHOOK_SECRET:
-        raise HTTPException(status_code=400)
+        return {"status":"disabled"}
 
     body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature")
@@ -401,4 +369,13 @@ async def razorpay_webhook(request: Request):
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status_code=400)
 
-    return {"status": "ok"}
+    payload = await request.json()
+
+    if payload["event"] == "payment_link.paid":
+        booking_id = payload["payload"]["payment_link"]["entity"]["reference_id"]
+        bookings.update_one(
+            {"booking_id": booking_id},
+            {"$set": {"status": "paid"}}
+        )
+
+    return {"status":"ok"}
