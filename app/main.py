@@ -23,6 +23,7 @@ logger = logging.getLogger("TempleBot")
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 MONGODB_URI = os.getenv("MONGODB_URI")
 
@@ -123,6 +124,60 @@ def generate_booking_id(prefix):
     )
     return f"SPJRSD-{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M')}-{counter['seq']:04d}"
 
+
+# =====================================================
+# 🔥 GEMINI INTELLIGENCE (ADDED SAFELY)
+# =====================================================
+
+def gemini_reply(phone, user_message):
+
+    if not GEMINI_API_KEY:
+        logger.warning("Gemini API key missing")
+        return None
+
+    try:
+        language = language_sessions.get(phone, "en")
+        instruction = "Reply in Telugu." if language == "tel" else "Reply in English."
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
+
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": f"""
+You are official assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple.
+
+Rules:
+- Be respectful and devotional.
+- Answer clearly.
+- If unrelated to temple, gently guide back.
+- {instruction}
+
+User:
+{user_message}
+"""
+                        }
+                    ]
+                }
+            ]
+        }
+
+        response = requests.post(url, json=payload)
+        result = response.json()
+
+        if "candidates" in result:
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+
+        logger.error(f"Gemini response error: {result}")
+        return None
+
+    except Exception as e:
+        logger.error(f"Gemini error: {e}")
+        return None
+
+
 # =====================================================
 # HEALTH
 # =====================================================
@@ -130,6 +185,7 @@ def generate_booking_id(prefix):
 @app.api_route("/", methods=["GET", "HEAD"])
 async def health():
     return {"status": "alive"}
+
 
 # =====================================================
 # WHATSAPP VERIFY
@@ -142,6 +198,7 @@ async def verify(request: Request):
         return PlainTextResponse(request.query_params.get("hub.challenge"))
     return PlainTextResponse("Verification failed", status_code=403)
 
+
 # =====================================================
 # MAIN WEBHOOK
 # =====================================================
@@ -152,7 +209,12 @@ async def webhook(request: Request):
     data = await request.json()
 
     try:
-        message = data["entry"][0]["changes"][0]["value"]["messages"][0]
+        value = data["entry"][0]["changes"][0]["value"]
+
+        if "messages" not in value:
+            return {"status": "no message"}
+
+        message = value["messages"][0]
         sender = normalize_phone(message["from"])
         msg_type = message["type"]
 
@@ -168,8 +230,9 @@ async def webhook(request: Request):
 
     return {"status": "ok"}
 
+
 # =====================================================
-# TEXT HANDLER
+# TEXT HANDLER (RESTORED + AI FALLBACK)
 # =====================================================
 
 def handle_text(sender, text):
@@ -186,6 +249,7 @@ def handle_text(sender, text):
         if len(parts) < 2:
             send_text(sender, "Please enter booking ID.")
             return
+
         booking = bookings.find_one({"booking_id": parts[1]})
         if booking:
             send_text(sender, f"Status: {booking['status']}")
@@ -193,11 +257,18 @@ def handle_text(sender, text):
             send_text(sender, "Booking not found.")
         return
 
+    # 🔥 AI fallback
+    ai_response = gemini_reply(sender, text)
+    if ai_response:
+        send_text(sender, ai_response)
+        return {"status": "ai"}
+
     send_text(sender, "Please use menu options.")
     return {"status": "unknown"}
 
+
 # =====================================================
-# LANGUAGE SELECTION
+# LANGUAGE
 # =====================================================
 
 def send_language_selection(phone):
@@ -209,12 +280,8 @@ def send_language_selection(phone):
         ]
     )
 
-# =====================================================
-# MAIN MENU
-# =====================================================
 
 def send_main_menu(phone):
-
     send_list(phone,
         "Main Menu:",
         [
@@ -229,9 +296,6 @@ def send_main_menu(phone):
         ]
     )
 
-# =====================================================
-# NAVIGATION ROUTER
-# =====================================================
 
 def handle_navigation(phone, selected):
 
@@ -283,8 +347,9 @@ def handle_navigation(phone, selected):
         send_main_menu(phone)
         return
 
+
 # =====================================================
-# 5 STAGE REGISTRATION
+# REGISTRATION FLOW (UNCHANGED)
 # =====================================================
 
 def start_registration(phone):
@@ -347,8 +412,9 @@ def handle_registration(phone, text):
         send_main_menu(phone)
         return
 
+
 # =====================================================
-# RAZORPAY WEBHOOK
+# RAZORPAY WEBHOOK (UNCHANGED)
 # =====================================================
 
 @app.post("/razorpay/webhook")
