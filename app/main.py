@@ -263,8 +263,15 @@ def handle_text(sender, text):
         send_text(sender, ai_response)
         return {"status": "ai"}
 
+    # AI fallback
+ai_reply = gemini_reply(sender, text)
+
+if ai_reply:
+    send_text(sender, ai_reply)
+else:
     send_text(sender, "Please use menu options.")
-    return {"status": "unknown"}
+
+return {"status": "ai"}
 
 
 # =====================================================
