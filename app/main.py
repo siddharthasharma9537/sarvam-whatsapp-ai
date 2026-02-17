@@ -367,7 +367,7 @@ def handle_navigation(phone, selected):
         return
 
     if selected == "darshan":
-        send_text(phone, "☀ 06:00 AM – 12:30 PM\n🌙 05:00 PM – 08:30 PM")
+        send_text(phone, "☀ 05:00 AM – 01:00 PM\n🌙 03:00 PM – 07:00 PM")
         send_main_menu(phone)
         return
 
