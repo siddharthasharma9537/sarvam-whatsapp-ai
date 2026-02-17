@@ -267,7 +267,7 @@ async def webhook(request: Request):
         sender = normalize_phone(message["from"])
 
         if message["type"] == "text":
-            handle_text(sender, message["text"]["body"].strip())
+            return handle_text(sender, message["text"]["body"].strip())
 
         elif message["type"] == "interactive":
              selected = message["interactive"]["list_reply"]["id"]
