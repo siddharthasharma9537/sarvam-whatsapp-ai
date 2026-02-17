@@ -361,23 +361,23 @@ def handle_navigation(phone, selected):
 
     if selected == "history":
 
-    lang = language_sessions.get(phone, "en")
+        lang = language_sessions.get(phone, "en")
 
-    if lang == "tel":
-        send_image(phone, HISTORY_IMAGE_TEL,
-                   "శ్రీ పార్వతి జడల రామలింగేశ్వర స్వామి దేవస్థానం స్థలపురాణము")
-    else:
-        send_image(phone, HISTORY_IMAGE_EN,
-                   "Sri Parvathi Jadala Ramalingeshwara Swamy Temple History")
+        if lang == "tel":
+            send_image(
+                phone,
+                HISTORY_IMAGE_TEL,
+                "శ్రీ పార్వతి జడల రామలింగేశ్వర స్వామి దేవస్థానం స్థలపురాణము"
+            )
+        else:
+            send_image(
+                phone,
+                HISTORY_IMAGE_EN,
+                "Sri Parvathi Jadala Ramalingeshwara Swamy Temple History"
+            )
 
-    send_main_menu(phone)
-    return
-
-    if selected == "contact":
-        send_text(phone, "Temple Office: 9390353848\n10 AM – 5 PM")
         send_main_menu(phone)
         return
-
 
 # =====================================================
 # REGISTRATION FLOW (UNCHANGED)
