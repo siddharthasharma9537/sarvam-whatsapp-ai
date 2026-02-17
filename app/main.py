@@ -137,6 +137,8 @@ def send_list(phone, text, rows):
         },
         json=data
     )
+    print("LIST STATUS:", response.status_code)
+    print("LIST RESPONSE:", response.text)
 
 
 def send_image(phone, image_url, caption):
@@ -301,7 +303,7 @@ def handle_text(sender, text):
         return {"status": "menu"}
 
     # 📋 Manual menu request
-    if lower in ["hi", "hello", "namaste", "start", "menu", "main menu", "మెను", "ప్రధాన మెను"]:
+    if lower in ["hi", "hello", "namaste", "start", "menu", "main menu"]:
         send_main_menu(sender)
         return {"status": "menu"}
 
@@ -368,7 +370,7 @@ def send_main_menu(phone):
             "ప్రధాన మెను:",
             [
                 {"id": "history", "title": "📜 స్థలపురాణం"},
-                {"id": "next_tithi", "title": "🌕 తదుపరి పౌర్ణమి / అమావాస్య"},
+                {"id": "next_tithi", "title": "🌕 తదుపరి తిథి"},
                 {"id": "change_lang", "title": "🌐 భాష మార్చండి"}
             ]
         )
@@ -378,7 +380,7 @@ def send_main_menu(phone):
             "Main Menu:",
             [
                 {"id": "history", "title": "📜 History"},
-                {"id": "next_tithi", "title": "🌕 Know Next Pournami / Amavasya"},
+                {"id": "next_tithi", "title": "🌕 Know Next Tithi"},
                 {"id": "change_lang", "title": "🌐 Change Language"}
             ]
         )
