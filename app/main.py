@@ -274,8 +274,8 @@ async def webhook(request: Request):
              return handle_navigation(sender, selected)
 
     except Exception as e:
-        logger.error(e)
-
+    logger.exception("Webhook error occurred")
+    
     return {"status": "ok"}
 
 # =====================================================
