@@ -284,7 +284,7 @@ async def webhook(request: Request):
 
 def handle_text(sender, text):
 
-    lower = text.lower()
+    lower = text.strip().lower()
     
     print("HANDLE_TEXT CALLED:", text)
 
