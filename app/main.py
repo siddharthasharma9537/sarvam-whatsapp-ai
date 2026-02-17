@@ -129,7 +129,7 @@ def send_list(phone, text, rows):
             }
         }
     }
-    requests.post(
+    response = requests.post(
         GRAPH_URL,
         headers={
             "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -157,7 +157,7 @@ def send_image(phone, image_url, caption):
         },
         json=data
     )
-
+    print("LIST RESPONSE:", response.status_code, response.text)
 # =====================================================
 # TITHI SEARCH ENGINE
 # =====================================================
