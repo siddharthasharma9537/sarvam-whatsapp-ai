@@ -267,11 +267,11 @@ async def webhook(request: Request):
         sender = normalize_phone(message["from"])
 
         if message["type"] == "text":
-            return handle_text(sender, message["text"]["body"].strip())
+            handle_text(sender, message["text"]["body"].strip())
 
-        if message["type"] == "interactive":
-            selected = message["interactive"]["list_reply"]["id"]
-            return handle_navigation(sender, selected)
+        elif message["type"] == "interactive":
+             selected = message["interactive"]["list_reply"]["id"]
+             handle_navigation(sender, selected)
 
     except Exception as e:
         logger.error(e)
