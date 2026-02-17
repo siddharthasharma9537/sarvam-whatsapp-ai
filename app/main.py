@@ -282,21 +282,39 @@ async def webhook(request: Request):
 # =====================================================
 
 def handle_text(sender, text):
+
     lower = text.lower()
 
-    # Direct keyword search for Amavasya
+    # -------------------------------------------------
+    # MENU COMMAND
+    # -------------------------------------------------
+    if lower in ["menu", "main menu", "మెను", "ప్రధాన మెను"]:
+        send_main_menu(sender)
+        return {"status": "menu"}
+
+    # -------------------------------------------------
+    # NEXT AMAVASYA
+    # -------------------------------------------------
     if "amavasya" in lower or "అమావాస్య" in lower:
         result = get_next_tithi("amavasya")
         if result:
-            send_text(sender, f"Next Amavasya: {result['date']}-{result['month']} - {result['event_english']}")
-            return {"status": "amavasya"}
+            message = f"🌑 Next Amavasya:\n📅 {result['date']} {result['month']} {datetime.utcnow().year}"
+            send_text(sender, message)
+        else:
+            send_text(sender, "No upcoming Amavasya found.")
+        return {"status": "amavasya"}
 
+    # -------------------------------------------------
+    # NEXT POURNAMI
+    # -------------------------------------------------
     if "pournami" in lower or "పౌర్ణమి" in lower:
         result = get_next_tithi("pournami")
         if result:
-            send_text(sender, f"Next Pournami: {result['date']}-{result['month']} - {result['event_english']}")
-            return {"status": "pournami"}
-
+            message = f"🌕 Next Pournami:\n📅 {result['date']} {result['month']} {datetime.utcnow().year}"
+            send_text(sender, message)
+        else:
+            send_text(sender, "No upcoming Pournami found.")
+        return {"status": "pournami"}
     ai = gemini_reply(sender, text)
     if ai:
         send_text(sender, ai)
