@@ -256,6 +256,7 @@ async def verify(request: Request):
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
+    print("WEBHOOK RECEIVED:", data)
 
     try:
         value = data["entry"][0]["changes"][0]["value"]
