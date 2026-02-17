@@ -217,11 +217,14 @@ async def health():
 
 @app.get("/webhook")
 async def verify(request: Request):
-    if request.query_params.get("hub.mode") == "subscribe" and
-       request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
-        return PlainTextResponse(request.query_params.get("hub.challenge"))
-    return PlainTextResponse("Verification failed", status_code=403)
 
+    if (
+        request.query_params.get("hub.mode") == "subscribe"
+        and request.query_params.get("hub.verify_token") == VERIFY_TOKEN
+    ):
+        return PlainTextResponse(request.query_params.get("hub.challenge"))
+
+    return PlainTextResponse("Verification failed", status_code=403)
 
 # =====================================================
 # MAIN WEBHOOK
