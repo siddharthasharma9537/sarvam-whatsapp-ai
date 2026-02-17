@@ -283,7 +283,7 @@ async def webhook(request: Request):
 
 def handle_text(sender, text):
 
-    lower = text.lower()
+    lower = text.lower().strip()
 
     # -------------------------------------------------
     # 1️⃣ REGISTRATION FLOW (ALWAYS FIRST)
