@@ -26,6 +26,8 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 MONGODB_URI = os.getenv("MONGODB_URI")
+HISTORY_IMAGE_EN = "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20ENG%20(1).PNG"
+HISTORY_IMAGE_TEL = "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20TEL%20(1).PNG"
 
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
@@ -345,9 +347,18 @@ def handle_navigation(phone, selected):
         return
 
     if selected == "history":
-        send_text(phone, "Swayambhu Lingam associated with Sage Parashurama.")
-        send_main_menu(phone)
-        return
+
+    lang = language_sessions.get(phone, "en")
+
+    if lang == "tel":
+        send_image(phone, HISTORY_IMAGE_TEL,
+                   "శ్రీ పార్వతి జడల రామలింగేశ్వర స్వామి దేవస్థానం స్థలపురాణము")
+    else:
+        send_image(phone, HISTORY_IMAGE_EN,
+                   "Sri Parvathi Jadala Ramalingeshwara Swamy Temple History")
+
+    send_main_menu(phone)
+    return
 
     if selected == "contact":
         send_text(phone, "Temple Office: 9390353848\n10 AM – 5 PM")
