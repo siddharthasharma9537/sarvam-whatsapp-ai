@@ -287,6 +287,8 @@ def handle_text(sender, text):
     lower = text.strip().lower()
     
     print("HANDLE_TEXT CALLED:", text)
+    print("CHECKING GREETING CONDITION")  # 👈 ADD THIS LINE HERE
+
 
     # 🔐 Registration flow must be first
     if sender in registration_sessions:
@@ -294,11 +296,12 @@ def handle_text(sender, text):
 
     # 👋 Greeting → Show Menu (NOT Gemini)
     if lower in ["hi", "hello", "namaste", "start"]:
+        print("GREETING MATCHED")  # 👈 ADD THIS ALSO
         send_main_menu(sender)
         return {"status": "menu"}
 
     # 📋 Manual menu request
-    if lower in ["menu", "main menu", "మెను", "ప్రధాన మెను"]:
+    if lower in ["hi", "hello", "namaste", "start", "menu", "main menu", "మెను", "ప్రధాన మెను"]:
         send_main_menu(sender)
         return {"status": "menu"}
 
