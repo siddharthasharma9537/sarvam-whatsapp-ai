@@ -54,6 +54,22 @@ if "phone_1" not in devotees.index_information():
 
 if "booking_id_1" not in bookings.index_information():
     bookings.create_index("booking_id", unique=True)
+
+# =====================================================
+# LOAD SPECIAL DAYS DATASET
+# =====================================================
+
+import json
+from datetime import date
+
+try:
+    with open("app/data/special_days.json", "r", encoding="utf-8") as f:
+        SPECIAL_DAYS = json.load(f)
+    logger.info("Special days dataset loaded successfully.")
+except Exception as e:
+    logger.error(f"Failed to load special days dataset: {e}")
+    SPECIAL_DAYS = []
+
 # =====================================================
 # RAZORPAY SAFE INIT
 # =====================================================
