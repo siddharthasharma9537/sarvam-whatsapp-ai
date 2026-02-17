@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
-from pymongo import MongoClient, ReturnDocument
+from pymongo import MongoClient
 from datetime import datetime, date
 import requests
 import os
@@ -49,16 +49,12 @@ db = client["sohum_db"]
 
 devotees = db["devotees"]
 bookings = db["bookings"]
-counters = db["counters"]
 
-if "phone_1" not in devotees.index_information():
-    devotees.create_index("phone", unique=True)
-
-if "booking_id_1" not in bookings.index_information():
-    bookings.create_index("booking_id", unique=True)
+devotees.create_index("phone", unique=True)
+bookings.create_index("booking_id", unique=True)
 
 # =====================================================
-# LOAD SPECIAL DAYS DATASET
+# LOAD SPECIAL DAYS
 # =====================================================
 
 try:
@@ -75,7 +71,9 @@ except Exception as e:
 
 razorpay_client = None
 if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
-    razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+    razorpay_client = razorpay.Client(
+        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
+    )
 
 # =====================================================
 # SESSION STORES
@@ -95,25 +93,29 @@ def normalize_phone(phone):
     return phone
 
 
+def whatsapp_request(payload):
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    response = requests.post(GRAPH_URL, headers=headers, json=payload)
+    logger.info(f"WhatsApp Status: {response.status_code}")
+    logger.info(f"WhatsApp Response: {response.text}")
+    return response
+
+
 def send_text(phone, message):
-    data = {
+    payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "text",
         "text": {"body": message}
     }
-    requests.post(
-        GRAPH_URL,
-        headers={
-            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-            "Content-Type": "application/json"
-        },
-        json=data
-    )
+    whatsapp_request(payload)
 
 
 def send_list(phone, text, rows):
-    data = {
+    payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "interactive",
@@ -129,20 +131,11 @@ def send_list(phone, text, rows):
             }
         }
     }
-    response = requests.post(
-        GRAPH_URL,
-        headers={
-            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-            "Content-Type": "application/json"
-        },
-        json=data
-    )
-    print("LIST STATUS:", response.status_code)
-    print("LIST RESPONSE:", response.text)
+    whatsapp_request(payload)
 
 
 def send_image(phone, image_url, caption):
-    data = {
+    payload = {
         "messaging_product": "whatsapp",
         "to": phone,
         "type": "image",
@@ -151,17 +144,10 @@ def send_image(phone, image_url, caption):
             "caption": caption
         }
     }
-    requests.post(
-        GRAPH_URL,
-        headers={
-            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-            "Content-Type": "application/json"
-        },
-        json=data
-    )
-    print("LIST RESPONSE:", response.status_code, response.text)
+    whatsapp_request(payload)
+
 # =====================================================
-# TITHI SEARCH ENGINE
+# TITHI ENGINE
 # =====================================================
 
 def get_next_tithi(keyword):
@@ -174,14 +160,10 @@ def get_next_tithi(keyword):
 
         if keyword in name_en or keyword in name_tel:
             try:
-                event_date = date(
-                    today.year,
-                    event["month_number"],
-                    event["date"]
-                )
+                event_date = date(today.year, event["month_number"], event["date"])
                 if event_date >= today:
                     upcoming.append((event_date, event))
-            except:
+            except Exception:
                 continue
 
     if not upcoming:
@@ -189,46 +171,6 @@ def get_next_tithi(keyword):
 
     upcoming.sort(key=lambda x: x[0])
     return upcoming[0][1]
-
-# =====================================================
-# GEMINI FALLBACK
-# =====================================================
-
-def gemini_reply(phone, user_message):
-    if not GEMINI_API_KEY:
-        return None
-
-    try:
-        lang = language_sessions.get(phone, "en")
-        instruction = "Reply in Telugu." if lang == "tel" else "Reply in English."
-
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-
-        payload = {
-            "contents": [{
-                "parts": [{
-                    "text": f"""
-You are assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple.
-Be devotional and temple-specific.
-{instruction}
-
-User:
-{user_message}
-"""
-                }]
-            }]
-        }
-
-        response = requests.post(url, json=payload)
-        result = response.json()
-
-        if "candidates" in result:
-            return result["candidates"][0]["content"]["parts"][0]["text"]
-
-        return None
-
-    except:
-        return None
 
 # =====================================================
 # HEALTH
@@ -258,10 +200,11 @@ async def verify(request: Request):
 @app.post("/webhook")
 async def webhook(request: Request):
     data = await request.json()
-    print("WEBHOOK RECEIVED:", data)
+    logger.info(f"WEBHOOK RECEIVED: {data}")
 
     try:
         value = data["entry"][0]["changes"][0]["value"]
+
         if "messages" not in value:
             return {"status": "no message"}
 
@@ -269,15 +212,15 @@ async def webhook(request: Request):
         sender = normalize_phone(message["from"])
 
         if message["type"] == "text":
-            return handle_text(sender, message["text"]["body"].strip())
+            return handle_text(sender, message["text"]["body"])
 
-        elif message["type"] == "interactive":
-             selected = message["interactive"]["list_reply"]["id"]
-             return handle_navigation(sender, selected)
+        if message["type"] == "interactive":
+            selected = message["interactive"]["list_reply"]["id"]
+            return handle_navigation(sender, selected)
 
     except Exception as e:
-        logger.exception("Webhook error occurred")
-    
+        logger.exception("Webhook processing error")
+
     return {"status": "ok"}
 
 # =====================================================
@@ -286,82 +229,49 @@ async def webhook(request: Request):
 
 def handle_text(sender, text):
 
-    lower = text.strip().lower()
-    
-    print("HANDLE_TEXT CALLED:", text)
-    print("CHECKING GREETING CONDITION")  # 👈 ADD THIS LINE HERE
-
-
-    # 🔐 Registration flow must be first
+    # 1️⃣ REGISTRATION LOCK FIRST
     if sender in registration_sessions:
         return handle_registration(sender, text)
 
-    # 👋 Greeting → Show Menu (NOT Gemini)
+    # 2️⃣ Now normalize
+    lower = text.strip().lower()
+
+    # 3️⃣ Greeting
     if lower in ["hi", "hello", "namaste", "start"]:
-        print("GREETING MATCHED")  # 👈 ADD THIS ALSO
         send_main_menu(sender)
         return {"status": "menu"}
 
-    # 📋 Manual menu request
-    if lower in ["hi", "hello", "namaste", "start", "menu", "main menu"]:
+    # 4️⃣ Menu command
+    if lower in ["menu", "main menu"]:
         send_main_menu(sender)
         return {"status": "menu"}
 
-    # 🌑 Amavasya direct keyword
+    # Amavasya
     if "amavasya" in lower or "అమావాస్య" in lower:
         result = get_next_tithi("amavasya")
         if result:
-            send_text(sender, f"Next Amavasya: {result['date']} {result['month']}")
-            return {"status": "amavasya"}
+            send_text(sender, f"Next Amavasya: {result['date']}-{result['month_number']}")
+        else:
+            send_text(sender, "No upcoming Amavasya found.")
+        return {"status": "amavasya"}
 
-    # 🌕 Pournami direct keyword
+    # Pournami
     if "pournami" in lower or "పౌర్ణమి" in lower:
         result = get_next_tithi("pournami")
         if result:
-            send_text(sender, f"Next Pournami: {result['date']} {result['month']}")
-            return {"status": "pournami"}
-
-    # 📦 Booking status
-    if lower.startswith("status"):
-        parts = text.split(" ")
-        if len(parts) < 2:
-            send_text(sender, "Please enter booking ID.")
-            return {"status": "missing_id"}
-
-        booking = bookings.find_one({"booking_id": parts[1]})
-        if booking:
-            send_text(sender, f"Status: {booking['status']}")
+            send_text(sender, f"Next Pournami: {result['date']}-{result['month_number']}")
         else:
-            send_text(sender, "Booking not found.")
-        return {"status": "status_checked"}
-
-    # 🤖 AI fallback LAST
-    ai_response = gemini_reply(sender, text)
-
-    if ai_response:
-        send_text(sender, ai_response)
-        return {"status": "ai"}
+            send_text(sender, "No upcoming Pournami found.")
+        return {"status": "pournami"}
 
     send_text(sender, "Please use menu options.")
     return {"status": "unknown"}
+
 # =====================================================
 # MENU
 # =====================================================
 
-def send_language_selection(phone):
-    send_list(
-        phone,
-        "Om Namah Shivaya 🙏 Choose Language:",
-        [
-            {"id": "lang_en", "title": "English 🇬🇧"},
-            {"id": "lang_tel", "title": "తెలుగు 🇮🇳"}
-        ]
-    )
-
-
 def send_main_menu(phone):
-    print("SEND_MAIN_MENU CALLED")
-
     lang = language_sessions.get(phone, "en")
 
     if lang == "tel":
@@ -369,6 +279,7 @@ def send_main_menu(phone):
             phone,
             "ప్రధాన మెను:",
             [
+                {"id": "register", "title": "📝 భక్తుడు నమోదు"},
                 {"id": "history", "title": "📜 స్థలపురాణం"},
                 {"id": "next_tithi", "title": "🌕 తదుపరి తిథి"},
                 {"id": "change_lang", "title": "🌐 భాష మార్చండి"}
@@ -379,39 +290,45 @@ def send_main_menu(phone):
             phone,
             "Main Menu:",
             [
+                {"id": "register", "title": "📝 Register Devotee"},
                 {"id": "history", "title": "📜 History"},
                 {"id": "next_tithi", "title": "🌕 Know Next Tithi"},
                 {"id": "change_lang", "title": "🌐 Change Language"}
             ]
         )
 
+# =====================================================
+# NAVIGATION
+# =====================================================
 
 def handle_navigation(phone, selected):
-        print("HANDLE_NAVIGATION CALLED WITH:", selected)
+
     if selected == "lang_en":
         language_sessions[phone] = "en"
         send_main_menu(phone)
-        return
+        return {"status": "lang_en"}
 
     if selected == "lang_tel":
         language_sessions[phone] = "tel"
         send_main_menu(phone)
-        return
+        return {"status": "lang_tel"}
 
     if selected == "next_tithi":
-        print("NEXT TITHI BLOCK ENTERED")
         amavasya = get_next_tithi("amavasya")
         pournami = get_next_tithi("pournami")
 
         message = ""
         if amavasya:
-            message += f"Next Amavasya: {amavasya['date']}-{amavasya['month']}\n"
+            message += f"Next Amavasya: {amavasya['date']}-{amavasya['month_number']}\n"
         if pournami:
-            message += f"Next Pournami: {pournami['date']}-{pournami['month']}"
+            message += f"Next Pournami: {pournami['date']}-{pournami['month_number']}"
+
+        if not message:
+            message = "No upcoming tithi found."
 
         send_text(phone, message)
         send_main_menu(phone)
-        return
+        return {"status": "next_tithi"}
 
     if selected == "history":
         lang = language_sessions.get(phone, "en")
@@ -420,7 +337,12 @@ def handle_navigation(phone, selected):
         else:
             send_image(phone, HISTORY_IMAGE_EN, "Temple History")
         send_main_menu(phone)
-        return
+        return {"status": "history"}
+
+    if selected == "register":
+        return start_registration(phone)
+
+    return {"status": "unknown"}
         
 # =====================================================
 # REGISTRATION FLOW (UNCHANGED)
@@ -431,15 +353,25 @@ def start_registration(phone):
     if devotees.find_one({"phone": phone}):
         send_text(phone, "🙏 You are already registered.")
         send_main_menu(phone)
-        return
+        return {"status": "already_registered"}
 
     registration_sessions[phone] = {"step":"name","data":{}}
-    send_text(phone, "Enter Full Name:")
+    send_text(phone, "📝 Enter Full Name:\n(Type 'cancel' anytime to stop)")
+    return {"status": "registration_started"}
 
 
 def handle_registration(phone, text):
 
-    session = registration_sessions[phone]
+    if text.lower() == "cancel":
+        registration_sessions.pop(phone, None)
+        send_text(phone, "Registration cancelled.")
+        send_main_menu(phone)
+        return {"status": "cancelled"}
+
+    session = registration_sessions.get(phone)
+    if not session:
+        return {"status": "no_session"}
+    
     step = session["step"]
     data = session["data"]
 
@@ -480,11 +412,11 @@ def handle_registration(phone, text):
             "registered_at": datetime.utcnow()
         })
 
-        registration_sessions.pop(phone)
+        registration_sessions.pop(phone, None)
 
-        send_text(phone, "🎉 Registration Successful!")
+        send_text(phone, "🎉 Registration Successful!\nMay Lord Shiva bless you 🙏")
         send_main_menu(phone)
-        return
+        return {"status": "registered"}
 
 
 # =====================================================
