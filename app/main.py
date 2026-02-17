@@ -283,52 +283,59 @@ async def webhook(request: Request):
 
 def handle_text(sender, text):
 
-    lower = text.lower().strip()
+    lower = text.lower()
 
-    # -------------------------------------------------
-    # 1️⃣ REGISTRATION FLOW (ALWAYS FIRST)
-    # -------------------------------------------------
+    # 🔐 Registration flow must be first
     if sender in registration_sessions:
         return handle_registration(sender, text)
 
-    # -------------------------------------------------
-    # MENU COMMAND
-    # -------------------------------------------------
+    # 👋 Greeting → Show Menu (NOT Gemini)
     if lower in ["hi", "hello", "namaste", "start"]:
         send_main_menu(sender)
         return {"status": "menu"}
 
-    # -------------------------------------------------
-    # NEXT AMAVASYA
-    # -------------------------------------------------
+    # 📋 Manual menu request
+    if lower in ["menu", "main menu", "మెను", "ప్రధాన మెను"]:
+        send_main_menu(sender)
+        return {"status": "menu"}
+
+    # 🌑 Amavasya direct keyword
     if "amavasya" in lower or "అమావాస్య" in lower:
         result = get_next_tithi("amavasya")
         if result:
-            message = f"🌑 Next Amavasya:\n📅 {result['date']} {result['month']} {date.today().year}"
-            send_text(sender, message)
-        else:
-            send_text(sender, "No upcoming Amavasya found.")
-        return {"status": "amavasya"}
+            send_text(sender, f"Next Amavasya: {result['date']} {result['month']}")
+            return {"status": "amavasya"}
 
-    # -------------------------------------------------
-    # NEXT POURNAMI
-    # -------------------------------------------------
+    # 🌕 Pournami direct keyword
     if "pournami" in lower or "పౌర్ణమి" in lower:
         result = get_next_tithi("pournami")
         if result:
-            message = f"🌕 Next Pournami:\n📅 {result['date']} {result['month']} {date.today().year}"
-            send_text(sender, message)
+            send_text(sender, f"Next Pournami: {result['date']} {result['month']}")
+            return {"status": "pournami"}
+
+    # 📦 Booking status
+    if lower.startswith("status"):
+        parts = text.split(" ")
+        if len(parts) < 2:
+            send_text(sender, "Please enter booking ID.")
+            return {"status": "missing_id"}
+
+        booking = bookings.find_one({"booking_id": parts[1]})
+        if booking:
+            send_text(sender, f"Status: {booking['status']}")
         else:
-            send_text(sender, "No upcoming Pournami found.")
-        return {"status": "pournami"}
-    ai = gemini_reply(sender, text)
-    if ai:
-        send_text(sender, ai)
+            send_text(sender, "Booking not found.")
+        return {"status": "status_checked"}
+
+    # 🤖 AI fallback LAST
+    ai_response = gemini_reply(sender, text)
+
+    if ai_response:
+        send_text(sender, ai_response)
         return {"status": "ai"}
 
     send_text(sender, "Please use menu options.")
     return {"status": "unknown"}
-
 # =====================================================
 # MENU
 # =====================================================
