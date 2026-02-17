@@ -304,20 +304,42 @@ def send_language_selection(phone):
 
 
 def send_main_menu(phone):
-    send_list(phone,
-        "Main Menu:",
-        [
-            {"id":"register","title":"📝 Register Devotee"},
-            {"id":"darshan","title":"🕉 Darshan & Timings"},
-            {"id":"accommodation","title":"🏠 Accommodation"},
-            {"id":"donation","title":"💰 Donation"},
-            {"id":"location","title":"📍 Location"},
-            {"id":"history","title":"📜 History"},
-            {"id":"contact","title":"📞 Contact"},
-            {"id":"change_lang","title":"🌐 Change Language"}
-        ]
-    )
 
+    lang = language_sessions.get(phone, "en")
+
+    if lang == "tel":
+
+        send_list(
+            phone,
+            "ప్రధాన మెను:",
+            [
+                {"id":"register","title":"📝 భక్తుడు నమోదు"},
+                {"id":"darshan","title":"🕉 దర్శనం & సమయాలు"},
+                {"id":"accommodation","title":"🏠 వసతి"},
+                {"id":"donation","title":"💰 విరాళం"},
+                {"id":"location","title":"📍 స్థానం"},
+                {"id":"history","title":"📜 స్థలపురాణం"},
+                {"id":"contact","title":"📞 సంప్రదించండి"},
+                {"id":"change_lang","title":"🌐 భాష మార్చండి"}
+            ]
+        )
+
+    else:
+
+        send_list(
+            phone,
+            "Main Menu:",
+            [
+                {"id":"register","title":"📝 Register Devotee"},
+                {"id":"darshan","title":"🕉 Darshan & Timings"},
+                {"id":"accommodation","title":"🏠 Accommodation"},
+                {"id":"donation","title":"💰 Donation"},
+                {"id":"location","title":"📍 Location"},
+                {"id":"history","title":"📜 History"},
+                {"id":"contact","title":"📞 Contact"},
+                {"id":"change_lang","title":"🌐 Change Language"}
+            ]
+        )
 
 def handle_navigation(phone, selected):
 
