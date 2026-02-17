@@ -358,6 +358,8 @@ def send_language_selection(phone):
 
 
 def send_main_menu(phone):
+    print("SEND_MAIN_MENU CALLED")
+
     lang = language_sessions.get(phone, "en")
 
     if lang == "tel":
