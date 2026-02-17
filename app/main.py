@@ -49,9 +49,11 @@ devotees = db["devotees"]
 bookings = db["bookings"]
 counters = db["counters"]
 
-devotees.create_index("phone", unique=True)
-bookings.create_index("booking_id", unique=True)
+if "phone_1" not in devotees.index_information():
+    devotees.create_index("phone", unique=True)
 
+if "booking_id_1" not in bookings.index_information():
+    bookings.create_index("booking_id", unique=True)
 # =====================================================
 # RAZORPAY SAFE INIT
 # =====================================================
@@ -215,7 +217,7 @@ async def health():
 
 @app.get("/webhook")
 async def verify(request: Request):
-    if request.query_params.get("hub.mode") == "subscribe" and \
+    if request.query_params.get("hub.mode") == "subscribe" and
        request.query_params.get("hub.verify_token") == VERIFY_TOKEN:
         return PlainTextResponse(request.query_params.get("hub.challenge"))
     return PlainTextResponse("Verification failed", status_code=403)
