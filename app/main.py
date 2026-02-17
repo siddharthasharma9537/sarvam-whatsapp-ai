@@ -387,6 +387,7 @@ def send_main_menu(phone):
 
 
 def handle_navigation(phone, selected):
+        print("HANDLE_NAVIGATION CALLED WITH:", selected)
     if selected == "lang_en":
         language_sessions[phone] = "en"
         send_main_menu(phone)
@@ -398,6 +399,7 @@ def handle_navigation(phone, selected):
         return
 
     if selected == "next_tithi":
+        print("NEXT TITHI BLOCK ENTERED")
         amavasya = get_next_tithi("amavasya")
         pournami = get_next_tithi("pournami")
 
