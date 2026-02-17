@@ -286,6 +286,12 @@ def handle_text(sender, text):
     lower = text.lower()
 
     # -------------------------------------------------
+    # 1️⃣ REGISTRATION FLOW (ALWAYS FIRST)
+    # -------------------------------------------------
+    if sender in registration_sessions:
+        return handle_registration(sender, text)
+
+    # -------------------------------------------------
     # MENU COMMAND
     # -------------------------------------------------
     if lower in ["menu", "main menu", "మెను", "ప్రధాన మెను"]:
