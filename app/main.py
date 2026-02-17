@@ -1,13 +1,14 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from pymongo import MongoClient, ReturnDocument
-from datetime import datetime
+from datetime import datetime, date
 import requests
 import os
 import logging
 import razorpay
 import hmac
 import hashlib
+import json
 
 # =====================================================
 # APP INIT
@@ -26,6 +27,7 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 MONGODB_URI = os.getenv("MONGODB_URI")
+
 HISTORY_IMAGE_EN = "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20ENG%20(1).PNG"
 HISTORY_IMAGE_TEL = "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20TEL%20(1).PNG"
 
@@ -59,26 +61,21 @@ if "booking_id_1" not in bookings.index_information():
 # LOAD SPECIAL DAYS DATASET
 # =====================================================
 
-import json
-from datetime import date
-
 try:
     with open("app/data/special_days.json", "r", encoding="utf-8") as f:
         SPECIAL_DAYS = json.load(f)
-    logger.info("Special days dataset loaded successfully.")
+    logger.info("Special days dataset loaded.")
 except Exception as e:
-    logger.error(f"Failed to load special days dataset: {e}")
+    logger.error(f"Dataset load failed: {e}")
     SPECIAL_DAYS = []
 
 # =====================================================
-# RAZORPAY SAFE INIT
+# RAZORPAY INIT
 # =====================================================
 
 razorpay_client = None
 if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
-    razorpay_client = razorpay.Client(
-        auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
-    )
+    razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
 # =====================================================
 # SESSION STORES
@@ -86,7 +83,6 @@ if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
 
 language_sessions = {}
 registration_sessions = {}
-flow_sessions = {}
 
 # =====================================================
 # UTILITIES
@@ -106,10 +102,14 @@ def send_text(phone, message):
         "type": "text",
         "text": {"body": message}
     }
-    requests.post(GRAPH_URL, headers={
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }, json=data)
+    requests.post(
+        GRAPH_URL,
+        headers={
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        json=data
+    )
 
 
 def send_list(phone, text, rows):
@@ -123,29 +123,23 @@ def send_list(phone, text, rows):
             "action": {
                 "button": "Select Option",
                 "sections": [{
-                    "title": "Services",
+                    "title": "Temple Services",
                     "rows": rows
                 }]
             }
         }
     }
-    requests.post(GRAPH_URL, headers={
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }, json=data)
-
-
-def generate_booking_id(prefix):
-    counter = counters.find_one_and_update(
-        {"_id": prefix},
-        {"$inc": {"seq": 1}},
-        upsert=True,
-        return_document=ReturnDocument.AFTER
+    requests.post(
+        GRAPH_URL,
+        headers={
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        json=data
     )
-    return f"SPJRSD-{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M')}-{counter['seq']:04d}"
+
 
 def send_image(phone, image_url, caption):
-
     data = {
         "messaging_product": "whatsapp",
         "to": phone,
@@ -155,7 +149,6 @@ def send_image(phone, image_url, caption):
             "caption": caption
         }
     }
-
     requests.post(
         GRAPH_URL,
         headers={
@@ -166,42 +159,62 @@ def send_image(phone, image_url, caption):
     )
 
 # =====================================================
-# 🔥 GEMINI INTELLIGENCE (ADDED SAFELY)
+# TITHI SEARCH ENGINE
+# =====================================================
+
+def get_next_tithi(keyword):
+    today = date.today()
+    upcoming = []
+
+    for event in SPECIAL_DAYS:
+        name_en = event.get("event_english", "").lower()
+        name_tel = event.get("event_telugu", "").lower()
+
+        if keyword in name_en or keyword in name_tel:
+            try:
+                event_date = date(
+                    today.year,
+                    event["month_number"],
+                    event["date"]
+                )
+                if event_date >= today:
+                    upcoming.append((event_date, event))
+            except:
+                continue
+
+    if not upcoming:
+        return None
+
+    upcoming.sort(key=lambda x: x[0])
+    return upcoming[0][1]
+
+# =====================================================
+# GEMINI FALLBACK
 # =====================================================
 
 def gemini_reply(phone, user_message):
-
     if not GEMINI_API_KEY:
-        logger.warning("Gemini API key missing")
         return None
 
     try:
-        language = language_sessions.get(phone, "en")
-        instruction = "Reply in Telugu." if language == "tel" else "Reply in English."
+        lang = language_sessions.get(phone, "en")
+        instruction = "Reply in Telugu." if lang == "tel" else "Reply in English."
 
         url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
         payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": f"""
-You are official assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple.
-
-Rules:
-- Be respectful and devotional.
-- Answer clearly.
-- If unrelated to temple, gently guide back.
-- {instruction}
+            "contents": [{
+                "parts": [{
+                    "text": f"""
+You are assistant of Sri Parvathi Jadala Ramalingeshwara Swamy Temple.
+Be devotional and temple-specific.
+{instruction}
 
 User:
 {user_message}
 """
-                        }
-                    ]
-                }
-            ]
+                }]
+            }]
         }
 
         response = requests.post(url, json=payload)
@@ -210,36 +223,30 @@ User:
         if "candidates" in result:
             return result["candidates"][0]["content"]["parts"][0]["text"]
 
-        logger.error(f"Gemini response error: {result}")
         return None
 
-    except Exception as e:
-        logger.error(f"Gemini error: {e}")
+    except:
         return None
-
 
 # =====================================================
 # HEALTH
 # =====================================================
 
-@app.api_route("/", methods=["GET", "HEAD"])
+@app.get("/")
 async def health():
     return {"status": "alive"}
 
-
 # =====================================================
-# WHATSAPP VERIFY
+# VERIFY
 # =====================================================
 
 @app.get("/webhook")
 async def verify(request: Request):
-
     if (
         request.query_params.get("hub.mode") == "subscribe"
         and request.query_params.get("hub.verify_token") == VERIFY_TOKEN
     ):
         return PlainTextResponse(request.query_params.get("hub.challenge"))
-
     return PlainTextResponse("Verification failed", status_code=403)
 
 # =====================================================
@@ -248,122 +255,97 @@ async def verify(request: Request):
 
 @app.post("/webhook")
 async def webhook(request: Request):
-
     data = await request.json()
 
     try:
         value = data["entry"][0]["changes"][0]["value"]
-
         if "messages" not in value:
             return {"status": "no message"}
 
         message = value["messages"][0]
         sender = normalize_phone(message["from"])
-        msg_type = message["type"]
 
-        if msg_type == "text":
+        if message["type"] == "text":
             return handle_text(sender, message["text"]["body"].strip())
 
-        if msg_type == "interactive":
+        if message["type"] == "interactive":
             selected = message["interactive"]["list_reply"]["id"]
             return handle_navigation(sender, selected)
 
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(e)
 
     return {"status": "ok"}
 
-
 # =====================================================
-# TEXT HANDLER (RESTORED + AI FALLBACK)
+# TEXT HANDLER
 # =====================================================
 
 def handle_text(sender, text):
+    lower = text.lower()
 
-    if sender in registration_sessions:
-        return handle_registration(sender, text)
+    # Direct keyword search for Amavasya
+    if "amavasya" in lower or "అమావాస్య" in lower:
+        result = get_next_tithi("amavasya")
+        if result:
+            send_text(sender, f"Next Amavasya: {result['date']}-{result['month']} - {result['event_english']}")
+            return {"status": "amavasya"}
 
-    if text.lower() in ["hi", "hello", "namaste", "start"]:
-        send_language_selection(sender)
-        return {"status": "language"}
+    if "pournami" in lower or "పౌర్ణమి" in lower:
+        result = get_next_tithi("pournami")
+        if result:
+            send_text(sender, f"Next Pournami: {result['date']}-{result['month']} - {result['event_english']}")
+            return {"status": "pournami"}
 
-    if text.lower().startswith("status"):
-        parts = text.split(" ")
-        if len(parts) < 2:
-            send_text(sender, "Please enter booking ID.")
-            return {"status": "missing_id"}
-
-        booking = bookings.find_one({"booking_id": parts[1]})
-        if booking:
-            send_text(sender, f"Status: {booking['status']}")
-        else:
-            send_text(sender, "Booking not found.")
-        return {"status": "status_checked"}
-
-    # 🔥 AI fallback (ONLY ONCE)
-    ai_response = gemini_reply(sender, text)
-
-    if ai_response:
-        send_text(sender, ai_response)
+    ai = gemini_reply(sender, text)
+    if ai:
+        send_text(sender, ai)
         return {"status": "ai"}
 
     send_text(sender, "Please use menu options.")
     return {"status": "unknown"}
 
 # =====================================================
-# LANGUAGE
+# MENU
 # =====================================================
 
 def send_language_selection(phone):
-    send_list(phone,
-        "Om Namah Shivaya 🙏\nChoose Language:",
+    send_list(
+        phone,
+        "Om Namah Shivaya 🙏 Choose Language:",
         [
-            {"id":"lang_en","title":"English 🇬🇧"},
-            {"id":"lang_tel","title":"తెలుగు 🇮🇳"}
+            {"id": "lang_en", "title": "English 🇬🇧"},
+            {"id": "lang_tel", "title": "తెలుగు 🇮🇳"}
         ]
     )
 
 
 def send_main_menu(phone):
-
     lang = language_sessions.get(phone, "en")
 
     if lang == "tel":
-
         send_list(
             phone,
             "ప్రధాన మెను:",
             [
-                {"id":"register","title":"📝 భక్తుడు నమోదు"},
-                {"id":"darshan","title":"🕉 దర్శనం & సమయాలు"},
-                {"id":"accommodation","title":"🏠 వసతి"},
-                {"id":"donation","title":"💰 విరాళం"},
-                {"id":"location","title":"📍 స్థానం"},
-                {"id":"history","title":"📜 స్థలపురాణం"},
-                {"id":"contact","title":"📞 సంప్రదించండి"},
-                {"id":"change_lang","title":"🌐 భాష మార్చండి"}
+                {"id": "history", "title": "📜 స్థలపురాణం"},
+                {"id": "next_tithi", "title": "🌕 తదుపరి పౌర్ణమి / అమావాస్య"},
+                {"id": "change_lang", "title": "🌐 భాష మార్చండి"}
             ]
         )
-
     else:
-
         send_list(
             phone,
             "Main Menu:",
             [
-                {"id":"register","title":"📝 Register Devotee"},
-                {"id":"darshan","title":"🕉 Darshan & Timings"},
-                {"id":"accommodation","title":"🏠 Accommodation"},
-                {"id":"donation","title":"💰 Donation"},
-                {"id":"location","title":"📍 Location"},
-                {"id":"history","title":"📜 History"},
-                {"id":"contact","title":"📞 Contact"},
-                {"id":"change_lang","title":"🌐 Change Language"}
+                {"id": "history", "title": "📜 History"},
+                {"id": "next_tithi", "title": "🌕 Know Next Pournami / Amavasya"},
+                {"id": "change_lang", "title": "🌐 Change Language"}
             ]
         )
 
-def handle_navigation(phone, selected):
 
+def handle_navigation(phone, selected):
     if selected == "lang_en":
         language_sessions[phone] = "en"
         send_main_menu(phone)
@@ -374,54 +356,29 @@ def handle_navigation(phone, selected):
         send_main_menu(phone)
         return
 
-    if selected == "change_lang":
-        send_language_selection(phone)
-        return
+    if selected == "next_tithi":
+        amavasya = get_next_tithi("amavasya")
+        pournami = get_next_tithi("pournami")
 
-    if selected == "register":
-        start_registration(phone)
-        return
+        message = ""
+        if amavasya:
+            message += f"Next Amavasya: {amavasya['date']}-{amavasya['month']}\n"
+        if pournami:
+            message += f"Next Pournami: {pournami['date']}-{pournami['month']}"
 
-    if selected == "darshan":
-        send_text(phone, "☀ 05:00 AM – 01:00 PM\n🌙 03:00 PM – 07:00 PM")
-        send_main_menu(phone)
-        return
-
-    if selected == "accommodation":
-        send_text(phone, "Accommodation booking coming soon.")
-        send_main_menu(phone)
-        return
-
-    if selected == "donation":
-        send_text(phone, "UPI Donations coming soon.")
-        send_main_menu(phone)
-        return
-
-    if selected == "location":
-        send_text(phone, "Cheruvugattu, Narketpally (5km), Nalgonda (18km)")
+        send_text(phone, message)
         send_main_menu(phone)
         return
 
     if selected == "history":
-
         lang = language_sessions.get(phone, "en")
-
         if lang == "tel":
-            send_image(
-                phone,
-                HISTORY_IMAGE_TEL,
-                "శ్రీ పార్వతి జడల రామలింగేశ్వర స్వామి దేవస్థానం స్థలపురాణము"
-            )
+            send_image(phone, HISTORY_IMAGE_TEL, "స్థలపురాణము")
         else:
-            send_image(
-                phone,
-                HISTORY_IMAGE_EN,
-                "Sri Parvathi Jadala Ramalingeshwara Swamy Temple History"
-            )
-
+            send_image(phone, HISTORY_IMAGE_EN, "Temple History")
         send_main_menu(phone)
         return
-
+        
 # =====================================================
 # REGISTRATION FLOW (UNCHANGED)
 # =====================================================
