@@ -126,6 +126,26 @@ def generate_booking_id(prefix):
     )
     return f"SPJRSD-{prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M')}-{counter['seq']:04d}"
 
+def send_image(phone, image_url, caption):
+
+    data = {
+        "messaging_product": "whatsapp",
+        "to": phone,
+        "type": "image",
+        "image": {
+            "link": image_url,
+            "caption": caption
+        }
+    }
+
+    requests.post(
+        GRAPH_URL,
+        headers={
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        json=data
+    )
 
 # =====================================================
 # 🔥 GEMINI INTELLIGENCE (ADDED SAFELY)
@@ -250,31 +270,24 @@ def handle_text(sender, text):
         parts = text.split(" ")
         if len(parts) < 2:
             send_text(sender, "Please enter booking ID.")
-            return
+            return {"status": "missing_id"}
 
         booking = bookings.find_one({"booking_id": parts[1]})
         if booking:
             send_text(sender, f"Status: {booking['status']}")
         else:
             send_text(sender, "Booking not found.")
-        return
+        return {"status": "status_checked"}
 
-    # 🔥 AI fallback
+    # 🔥 AI fallback (ONLY ONCE)
     ai_response = gemini_reply(sender, text)
+
     if ai_response:
         send_text(sender, ai_response)
         return {"status": "ai"}
 
-    # AI fallback
-ai_reply = gemini_reply(sender, text)
-
-if ai_reply:
-    send_text(sender, ai_reply)
-else:
     send_text(sender, "Please use menu options.")
-
-return {"status": "ai"}
-
+    return {"status": "unknown"}
 
 # =====================================================
 # LANGUAGE
