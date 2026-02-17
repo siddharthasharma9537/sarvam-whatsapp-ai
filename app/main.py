@@ -298,7 +298,7 @@ def handle_text(sender, text):
     if "amavasya" in lower or "అమావాస్య" in lower:
         result = get_next_tithi("amavasya")
         if result:
-            message = f"🌑 Next Amavasya:\n📅 {result['date']} {result['month']} {datetime.utcnow().year}"
+            message = f"🌑 Next Amavasya:\n📅 {result['date']} {result['month']} {date.today().year}"
             send_text(sender, message)
         else:
             send_text(sender, "No upcoming Amavasya found.")
@@ -310,7 +310,7 @@ def handle_text(sender, text):
     if "pournami" in lower or "పౌర్ణమి" in lower:
         result = get_next_tithi("pournami")
         if result:
-            message = f"🌕 Next Pournami:\n📅 {result['date']} {result['month']} {datetime.utcnow().year}"
+            message = f"🌕 Next Pournami:\n📅 {result['date']} {result['month']} {date.today().year}"
             send_text(sender, message)
         else:
             send_text(sender, "No upcoming Pournami found.")
