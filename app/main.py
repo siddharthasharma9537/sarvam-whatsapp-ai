@@ -295,8 +295,8 @@ def handle_text(sender, text):
     # MENU COMMAND
     # -------------------------------------------------
     if lower in ["hi", "hello", "namaste", "start"]:
-        send_language_selection(sender)
-        return {"status": "language"}
+    send_main_menu(sender)
+    return {"status": "menu"}
 
     # -------------------------------------------------
     # NEXT AMAVASYA
