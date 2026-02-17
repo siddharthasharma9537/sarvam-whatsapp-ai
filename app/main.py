@@ -271,7 +271,7 @@ async def webhook(request: Request):
 
         elif message["type"] == "interactive":
              selected = message["interactive"]["list_reply"]["id"]
-             handle_navigation(sender, selected)
+             return handle_navigation(sender, selected)
 
     except Exception as e:
         logger.error(e)
@@ -285,6 +285,8 @@ async def webhook(request: Request):
 def handle_text(sender, text):
 
     lower = text.lower()
+    
+    print("HANDLE_TEXT CALLED:", text)
 
     # 🔐 Registration flow must be first
     if sender in registration_sessions:
