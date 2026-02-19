@@ -24,21 +24,20 @@ logger = logging.getLogger("TempleBot")
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 MONGODB_URI = os.getenv("MONGODB_URI")
-
-HISTORY_IMAGE_EN = "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20ENG%20(1).PNG"
-HISTORY_IMAGE_TEL = "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20TEL%20(1).PNG"
 
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET")
 
 if not all([VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, MONGODB_URI]):
-    raise Exception("Missing core environment variables")
+    raise Exception("Missing required environment variables")
 
 GRAPH_URL = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+
+HISTORY_IMAGE_EN = "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20ENG%20(1).PNG"
+HISTORY_IMAGE_TEL = "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20TEL%20(1).PNG"
 
 # =====================================================
 # DATABASE
@@ -54,16 +53,22 @@ devotees.create_index("phone", unique=True)
 bookings.create_index("booking_id", unique=True)
 
 # =====================================================
-# LOAD SPECIAL DAYS
+# LOAD SPECIAL DAYS (2026)
 # =====================================================
 
+SPECIAL_DAYS = []
+
 try:
-    with open("app/data/special_days_2026.json", "r", encoding="utf-8") as f:
-        SPECIAL_DAYS_2026 = json.load(f)
-    logger.info("Special days dataset loaded.")
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    FILE_PATH = os.path.join(BASE_DIR, "data", "special_days_2026.json")
+
+    with open(FILE_PATH, "r", encoding="utf-8") as f:
+        SPECIAL_DAYS = json.load(f)
+
+    logger.info("Special days 2026 dataset loaded successfully.")
+
 except Exception as e:
     logger.error(f"Dataset load failed: {e}")
-    SPECIAL_DAYS = []
 
 # =====================================================
 # RAZORPAY INIT
@@ -98,9 +103,12 @@ def whatsapp_request(payload):
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
     }
+
     response = requests.post(GRAPH_URL, headers=headers, json=payload)
+
     logger.info(f"WhatsApp Status: {response.status_code}")
     logger.info(f"WhatsApp Response: {response.text}")
+
     return response
 
 
@@ -147,14 +155,18 @@ def send_image(phone, image_url, caption):
     whatsapp_request(payload)
 
 # =====================================================
-# TITHI ENGINE (CLEAN VERSION)
+# TITHI ENGINE
 # =====================================================
 
 def get_next_tithi(tithi_type):
+    if not SPECIAL_DAYS:
+        return None
+
     today = date.today()
     upcoming = []
 
-    for event in SPECIAL_DAYS:   # ✅ FIXED VARIABLE NAME
+    for event in SPECIAL_DAYS:
+
         if event.get("tithi_type") != tithi_type:
             continue
 
@@ -193,6 +205,7 @@ async def verify(request: Request):
         and request.query_params.get("hub.verify_token") == VERIFY_TOKEN
     ):
         return PlainTextResponse(request.query_params.get("hub.challenge"))
+
     return PlainTextResponse("Verification failed", status_code=403)
 
 # =====================================================
@@ -220,7 +233,7 @@ async def webhook(request: Request):
             selected = message["interactive"]["list_reply"]["id"]
             return handle_navigation(sender, selected)
 
-    except Exception as e:
+    except Exception:
         logger.exception("Webhook processing error")
 
     return {"status": "ok"}
@@ -231,40 +244,18 @@ async def webhook(request: Request):
 
 def handle_text(sender, text):
 
-    # 1️⃣ REGISTRATION LOCK FIRST
     if sender in registration_sessions:
         return handle_registration(sender, text)
 
-    # 2️⃣ Now normalize
     lower = text.strip().lower()
 
-    # 3️⃣ Greeting
     if lower in ["hi", "hello", "namaste", "start"]:
         send_main_menu(sender)
         return {"status": "menu"}
 
-    # 4️⃣ Menu command
     if lower in ["menu", "main menu"]:
         send_main_menu(sender)
         return {"status": "menu"}
-
-    # Amavasya
-    if "amavasya" in lower or "అమావాస్య" in lower:
-        result = get_next_tithi("amavasya")
-        if result:
-            send_text(sender, f"Next Amavasya: {result['date']}-{result['month_number']}")
-        else:
-            send_text(sender, "No upcoming Amavasya found.")
-        return {"status": "amavasya"}
-
-    # Pournami
-    if "pournami" in lower or "పౌర్ణమి" in lower:
-        result = get_next_tithi("pournami")
-        if result:
-            send_text(sender, f"Next Pournami: {result['date']}-{result['month_number']}")
-        else:
-            send_text(sender, "No upcoming Pournami found.")
-        return {"status": "pournami"}
 
     send_text(sender, "Please use menu options.")
     return {"status": "unknown"}
@@ -272,6 +263,17 @@ def handle_text(sender, text):
 # =====================================================
 # MENU
 # =====================================================
+
+def send_language_selection(phone):
+    send_list(
+        phone,
+        "Choose Language:",
+        [
+            {"id": "lang_en", "title": "English 🇬🇧"},
+            {"id": "lang_tel", "title": "తెలుగు 🇮🇳"}
+        ]
+    )
+
 
 def send_main_menu(phone):
     lang = language_sessions.get(phone, "en")
@@ -305,7 +307,6 @@ def send_main_menu(phone):
 
 def handle_navigation(phone, selected):
 
-    # 🌐 Language selection
     if selected == "lang_en":
         language_sessions[phone] = "en"
         send_main_menu(phone)
@@ -320,7 +321,6 @@ def handle_navigation(phone, selected):
         send_language_selection(phone)
         return {"status": "change_lang"}
 
-    # 🌕 Next Tithi
     if selected == "next_tithi":
 
         amavasya = get_next_tithi("amavasya")
@@ -341,9 +341,9 @@ def handle_navigation(phone, selected):
 
         send_text(phone, message.strip())
         send_main_menu(phone)
+
         return {"status": "tithi_sent"}
 
-    # 📜 History
     if selected == "history":
         lang = language_sessions.get(phone, "en")
 
@@ -355,14 +355,15 @@ def handle_navigation(phone, selected):
         send_main_menu(phone)
         return {"status": "history"}
 
-    # 📝 Registration
     if selected == "register":
         return start_registration(phone)
 
+    send_text(phone, "Invalid option selected.")
+    send_main_menu(phone)
     return {"status": "unknown"}
-        
+
 # =====================================================
-# REGISTRATION FLOW (UNCHANGED)
+# REGISTRATION FLOW
 # =====================================================
 
 def start_registration(phone):
@@ -372,7 +373,7 @@ def start_registration(phone):
         send_main_menu(phone)
         return {"status": "already_registered"}
 
-    registration_sessions[phone] = {"step":"name","data":{}}
+    registration_sessions[phone] = {"step": "name", "data": {}}
     send_text(phone, "📝 Enter Full Name:\n(Type 'cancel' anytime to stop)")
     return {"status": "registration_started"}
 
@@ -388,7 +389,7 @@ def handle_registration(phone, text):
     session = registration_sessions.get(phone)
     if not session:
         return {"status": "no_session"}
-    
+
     step = session["step"]
     data = session["data"]
 
@@ -399,7 +400,7 @@ def handle_registration(phone, text):
         return
 
     if step == "gotram":
-        data["gotram"] = text if text.lower()!="no" else "Not Provided"
+        data["gotram"] = text if text.lower() != "no" else "Not Provided"
         session["step"] = "address"
         send_text(phone, "Enter Address:")
         return
@@ -417,7 +418,7 @@ def handle_registration(phone, text):
         return
 
     if step == "email":
-        data["email"] = text if text.lower()!="no" else "Not Provided"
+        data["email"] = text if text.lower() != "no" else "Not Provided"
 
         devotees.insert_one({
             "phone": phone,
@@ -433,38 +434,5 @@ def handle_registration(phone, text):
 
         send_text(phone, "🎉 Registration Successful!\nMay Lord Shiva bless you 🙏")
         send_main_menu(phone)
+
         return {"status": "registered"}
-
-
-# =====================================================
-# RAZORPAY WEBHOOK (UNCHANGED)
-# =====================================================
-
-@app.post("/razorpay/webhook")
-async def razorpay_webhook(request: Request):
-
-    if not RAZORPAY_WEBHOOK_SECRET:
-        return {"status":"disabled"}
-
-    body = await request.body()
-    signature = request.headers.get("X-Razorpay-Signature")
-
-    expected = hmac.new(
-        RAZORPAY_WEBHOOK_SECRET.encode(),
-        body,
-        hashlib.sha256
-    ).hexdigest()
-
-    if not hmac.compare_digest(expected, signature):
-        raise HTTPException(status_code=400)
-
-    payload = await request.json()
-
-    if payload["event"] == "payment_link.paid":
-        booking_id = payload["payload"]["payment_link"]["entity"]["reference_id"]
-        bookings.update_one(
-            {"booking_id": booking_id},
-            {"$set": {"status": "paid"}}
-        )
-
-    return {"status":"ok"}
