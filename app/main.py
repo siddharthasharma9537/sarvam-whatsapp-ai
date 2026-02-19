@@ -336,9 +336,9 @@ def handle_navigation(phone, selected):
        if pournami:
            message += f"🌕 Next Pournami:\n{pournami['date_iso']}"
 
-       send_text(phone, message.strip())
-       send_main_menu(phone)
-       return
+           send_text(phone, message.strip())
+           send_main_menu(phone)
+           return
 
     if selected == "history":
         lang = language_sessions.get(phone, "en")
@@ -347,7 +347,7 @@ def handle_navigation(phone, selected):
         else:
             send_image(phone, HISTORY_IMAGE_EN, "Temple History")
             send_main_menu(phone)
-         return {"status": "history"}
+            return {"status": "history"}
 
     if selected == "register":
        return start_registration(phone)
