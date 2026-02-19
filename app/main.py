@@ -346,7 +346,7 @@ def handle_navigation(phone, selected):
             send_image(phone, HISTORY_IMAGE_TEL, "స్థలపురాణము")
         else:
             send_image(phone, HISTORY_IMAGE_EN, "Temple History")
-         send_main_menu(phone)
+            send_main_menu(phone)
          return {"status": "history"}
 
     if selected == "register":
