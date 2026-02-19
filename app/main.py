@@ -319,37 +319,39 @@ def handle_navigation(phone, selected):
 
     if selected == "next_tithi":
 
-    amavasya = get_next_tithi("amavasya")
-    pournami = get_next_tithi("pournami")
+        amavasya = get_next_tithi("amavasya")
+        pournami = get_next_tithi("pournami")
 
-    if not amavasya and not pournami:
-        send_text(phone, "No upcoming tithis found.")
+        if not amavasya and not pournami:
+            send_text(phone, "No upcoming tithis found.")
+            send_main_menu(phone)
+            return {"status": "no_tithi"}
+
+        message = ""
+
+        if amavasya:
+            message += f"🌑 Next Amavasya:\n{amavasya['date_iso']}\n\n"
+
+        if pournami:
+            message += f"🌕 Next Pournami:\n{pournami['date_iso']}"
+
+        send_text(phone, message.strip())
         send_main_menu(phone)
-        return {"status": "no_tithi"}
-
-    message = ""
-
-    if amavasya:
-        message += f"🌑 Next Amavasya:\n{amavasya['date_iso']}\n\n"
-
-    if pournami:
-        message += f"🌕 Next Pournami:\n{pournami['date_iso']}"
-
-    send_text(phone, message.strip())
-    send_main_menu(phone)
-    return {"status": "tithi_sent"}
+        return {"status": "tithi_sent"}
 
     if selected == "history":
         lang = language_sessions.get(phone, "en")
+
         if lang == "tel":
             send_image(phone, HISTORY_IMAGE_TEL, "స్థలపురాణము")
         else:
             send_image(phone, HISTORY_IMAGE_EN, "Temple History")
-            send_main_menu(phone)
-            return {"status": "history"}
+
+        send_main_menu(phone)
+        return {"status": "history"}
 
     if selected == "register":
-       return start_registration(phone)
+        return start_registration(phone)
 
     return {"status": "unknown"}
         
