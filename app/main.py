@@ -154,15 +154,16 @@ from datetime import datetime, date
 
 def get_next_tithi(tithi_type):
     today = date.today()
-
     upcoming = []
 
-    for event in SPECIAL_DAYS_2026:
+    for event in SPECIAL_DAYS:   # ✅ FIXED VARIABLE NAME
         if event.get("tithi_type") != tithi_type:
             continue
 
         try:
-            event_date = datetime.strptime(event["date_iso"], "%Y-%m-%d").date()
+            event_date = datetime.strptime(
+                event["date_iso"], "%Y-%m-%d"
+            ).date()
         except Exception:
             continue
 
@@ -172,10 +173,7 @@ def get_next_tithi(tithi_type):
     if not upcoming:
         return None
 
-    # Sort by actual ISO date
     upcoming.sort(key=lambda x: x[0])
-
-    # Return the full event dictionary
     return upcoming[0][1]
 
 # =====================================================
@@ -320,25 +318,26 @@ def handle_navigation(phone, selected):
         return {"status": "lang_tel"}
 
     if selected == "next_tithi":
-       amavasya = get_next_tithi("amavasya")
-       pournami = get_next_tithi("pournami")
 
-       if not amavasya and not pournami:
-           send_text(phone, "No upcoming tithis found.")
-           send_main_menu(phone)
-           return
+    amavasya = get_next_tithi("amavasya")
+    pournami = get_next_tithi("pournami")
 
-       message = ""
+    if not amavasya and not pournami:
+        send_text(phone, "No upcoming tithis found.")
+        send_main_menu(phone)
+        return {"status": "no_tithi"}
 
-       if amavasya:
-           message += f"🌑 Next Amavasya:\n{amavasya['date_iso']}\n\n"
+    message = ""
 
-       if pournami:
-           message += f"🌕 Next Pournami:\n{pournami['date_iso']}"
+    if amavasya:
+        message += f"🌑 Next Amavasya:\n{amavasya['date_iso']}\n\n"
 
-           send_text(phone, message.strip())
-           send_main_menu(phone)
-           return
+    if pournami:
+        message += f"🌕 Next Pournami:\n{pournami['date_iso']}"
+
+    send_text(phone, message.strip())
+    send_main_menu(phone)
+    return {"status": "tithi_sent"}
 
     if selected == "history":
         lang = language_sessions.get(phone, "en")
