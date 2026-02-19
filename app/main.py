@@ -150,8 +150,6 @@ def send_image(phone, image_url, caption):
 # TITHI ENGINE (CLEAN VERSION)
 # =====================================================
 
-from datetime import datetime, date
-
 def get_next_tithi(tithi_type):
     today = date.today()
     upcoming = []
@@ -317,15 +315,11 @@ def handle_navigation(phone, selected):
         send_main_menu(phone)
         return {"status": "lang_tel"}
 
+    if selected == "change_lang":
+        send_language_selection(phone)
+        return {"status": "change_lang"}
+
     if selected == "next_tithi":
-
-        amavasya = get_next_tithi("amavasya")
-        pournami = get_next_tithi("pournami")
-
-        if not amavasya and not pournami:
-            send_text(phone, "No upcoming tithis found.")
-            send_main_menu(phone)
-            return {"status": "no_tithi"}
 
         message = ""
 
