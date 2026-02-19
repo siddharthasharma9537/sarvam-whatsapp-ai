@@ -147,29 +147,35 @@ def send_image(phone, image_url, caption):
     whatsapp_request(payload)
 
 # =====================================================
-# TITHI ENGINE
+# TITHI ENGINE (CLEAN VERSION)
 # =====================================================
 
-def get_next_tithi(keyword):
+from datetime import datetime, date
+
+def get_next_tithi(tithi_type):
     today = date.today()
+
     upcoming = []
 
     for event in SPECIAL_DAYS:
-        name_en = event.get("event_english", "").lower()
-        name_tel = event.get("event_telugu", "").lower()
+        if event.get("tithi_type") != tithi_type:
+            continue
 
-        if keyword in name_en or keyword in name_tel:
-            try:
-                event_date = date(today.year, event["month_number"], event["date"])
-                if event_date >= today:
-                    upcoming.append((event_date, event))
-            except Exception:
-                continue
+        try:
+            event_date = datetime.strptime(event["date_iso"], "%Y-%m-%d").date()
+        except Exception:
+            continue
+
+        if event_date >= today:
+            upcoming.append((event_date, event))
 
     if not upcoming:
         return None
 
+    # Sort by actual ISO date
     upcoming.sort(key=lambda x: x[0])
+
+    # Return the full event dictionary
     return upcoming[0][1]
 
 # =====================================================
