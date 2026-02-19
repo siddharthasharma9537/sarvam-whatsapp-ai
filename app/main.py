@@ -163,6 +163,8 @@ def get_next_tithi(tithi_type):
         return None
 
     today = date.today()
+    print("DEBUG → TODAY DATE:", today)   # 👈 ADD THIS LINE HERE
+
     upcoming = []
 
     for event in SPECIAL_DAYS:
