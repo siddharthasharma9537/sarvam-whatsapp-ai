@@ -58,8 +58,8 @@ bookings.create_index("booking_id", unique=True)
 # =====================================================
 
 try:
-    with open("app/data/special_days.json", "r", encoding="utf-8") as f:
-        SPECIAL_DAYS = json.load(f)
+    with open("app/data/special_days_2026.json", "r", encoding="utf-8") as f:
+        SPECIAL_DAYS_2026 = json.load(f)
     logger.info("Special days dataset loaded.")
 except Exception as e:
     logger.error(f"Dataset load failed: {e}")
@@ -305,6 +305,7 @@ def send_main_menu(phone):
 
 def handle_navigation(phone, selected):
 
+    # 🌐 Language selection
     if selected == "lang_en":
         language_sessions[phone] = "en"
         send_main_menu(phone)
@@ -319,7 +320,16 @@ def handle_navigation(phone, selected):
         send_language_selection(phone)
         return {"status": "change_lang"}
 
+    # 🌕 Next Tithi
     if selected == "next_tithi":
+
+        amavasya = get_next_tithi("amavasya")
+        pournami = get_next_tithi("pournami")
+
+        if not amavasya and not pournami:
+            send_text(phone, "No upcoming tithis found.")
+            send_main_menu(phone)
+            return {"status": "no_tithi"}
 
         message = ""
 
@@ -333,6 +343,7 @@ def handle_navigation(phone, selected):
         send_main_menu(phone)
         return {"status": "tithi_sent"}
 
+    # 📜 History
     if selected == "history":
         lang = language_sessions.get(phone, "en")
 
@@ -344,6 +355,7 @@ def handle_navigation(phone, selected):
         send_main_menu(phone)
         return {"status": "history"}
 
+    # 📝 Registration
     if selected == "register":
         return start_registration(phone)
 
