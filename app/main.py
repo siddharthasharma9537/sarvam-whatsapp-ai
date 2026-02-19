@@ -438,3 +438,4 @@ def handle_registration(phone, text):
         send_main_menu(phone)
 
         return {"status": "registered"}
+
