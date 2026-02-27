@@ -47,18 +47,16 @@ def init_dependencies(
     send_main_menu_func,
     send_language_selection_func,
 ):
-    global (
-        VERIFY_TOKEN,
-        devotees,
-        sessions,
-        processed_messages,
-        admin_users,
-        admin_sessions,
-        offerings,
-        membership_audit_logs,
-        send_main_menu,
-        send_language_selection,
-    )
+    global VERIFY_TOKEN
+    global devotees
+    global sessions
+    global processed_messages
+    global admin_users
+    global admin_sessions
+    global offerings
+    global membership_audit_logs
+    global send_main_menu
+    global send_language_selection
 
     VERIFY_TOKEN = verify_token
     devotees = devotees_collection
