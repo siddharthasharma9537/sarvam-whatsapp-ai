@@ -140,7 +140,7 @@ async def webhook(request: Request):
 
         message_id = message.get("id")
 
-        if message_id and processed_messages:
+        if message_id and processed_messages is not None:
             if processed_messages.find_one({"message_id": message_id}):
                 logger.info(f"Duplicate message ignored: {message_id}")
                 return {"status": "duplicate"}
