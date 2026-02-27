@@ -41,9 +41,11 @@ db = client["sohum_db"]
 
 devotees = db["devotees"]
 bookings = db["bookings"]
+sessions = db["sessions"]   # 👈 ADD THIS LINE
 
 devotees.create_index("phone", unique=True)
 bookings.create_index("booking_id", unique=True)
+sessions.create_index("phone", unique=True)   # 👈 ADD THIS LINE
 
 # =====================================================
 # RAZORPAY INIT
@@ -54,12 +56,6 @@ if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
     razorpay_client = razorpay.Client(
         auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET)
     )
-
-# =====================================================
-# SESSION STORES
-# =====================================================
-
-language_sessions = {}
 
 # =====================================================
 # MENU FUNCTIONS
@@ -77,7 +73,8 @@ def send_language_selection(phone):
 
 
 def send_main_menu(phone):
-    lang = language_sessions.get(phone, "en")
+    from app.services.session_service import get_language
+    lang = get_language(phone, sessions)
 
     if lang == "tel":
         send_list(
@@ -117,7 +114,7 @@ async def health():
 init_dependencies(
     VERIFY_TOKEN,
     devotees,
+    sessions,
     send_main_menu,
-    send_language_selection,
-    language_sessions
+    send_language_selection
 )
