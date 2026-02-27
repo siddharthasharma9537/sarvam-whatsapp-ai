@@ -158,7 +158,7 @@ def handle_navigation(phone, selected):
             from app.services.whatsapp_service import send_image
             
             if lang == "tel":
-            send_image(
+                send_image(
                     phone,
                     "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20TEL%20(1).PNG",
                     "స్థలపురాణము"
