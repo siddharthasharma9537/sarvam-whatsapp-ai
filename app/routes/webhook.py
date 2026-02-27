@@ -146,35 +146,32 @@ def handle_navigation(phone, selected):
 
         send_text(phone, message.strip())
         send_main_menu(phone)
-
         return {"status": "tithi_sent"}
 
     if selected == "register":
         return start_registration(phone, devotees, send_main_menu)
-    
-        if selected == "history":
-            lang = language_sessions.get(phone, "en")
 
-            from app.services.whatsapp_service import send_image
-            
-            if lang == "tel":
-                send_image(
-                    phone,
-                    "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20TEL%20(1).PNG",
-                    "స్థలపురాణము"
-                )
-            else:
-                from app.services.whatsapp_service import send_image
-                send_image(
-                    phone,
-                    "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20ENG%20(1).PNG",
-                    "Temple History"
-                )
+    if selected == "history":
+        lang = language_sessions.get(phone, "en")
 
-            send_main_menu(phone)
-            return {"status": "history"}
+        from app.services.whatsapp_service import send_image
+
+        if lang == "tel":
+            send_image(
+                phone,
+                "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20TEL%20(1).PNG",
+                "స్థలపురాణము"
+            )
+        else:
+            send_image(
+                phone,
+                "https://pub-d1d3a6c8900e4412aac6397524edd899.r2.dev/SPJRSD%20Temple%20History%20ENG%20(1).PNG",
+                "Temple History"
+            )
+
+        send_main_menu(phone)
+        return {"status": "history"}
 
     send_text(phone, "Invalid option selected.")
     send_main_menu(phone)
     return {"status": "unknown"}
-
