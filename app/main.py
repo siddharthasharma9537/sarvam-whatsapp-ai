@@ -7,14 +7,45 @@ import razorpay
 from app.services.whatsapp_service import send_list
 from app.routes.webhook import router as webhook_router, init_dependencies
 
-# =====================================================
-# APP INIT
-# =====================================================
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
 
 app = FastAPI()
 app.include_router(webhook_router)
 
-logging.basicConfig(level=logging.INFO)
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    logger.error(f"HTTP error: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "Request failed", "detail": exc.detail},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    logger.error(f"Validation error: {exc.errors()}")
+    return JSONResponse(
+        status_code=422,
+        content={"error": "Validation error", "detail": exc.errors()},
+    )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error"},
+    )
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
 logger = logging.getLogger("TempleBot")
 
 # =====================================================
@@ -36,7 +67,12 @@ if not all([VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, MONGODB_URI]):
 # DATABASE
 # =====================================================
 
-client = MongoClient(MONGODB_URI)
+client = MongoClient(
+    MONGODB_URI,
+    serverSelectionTimeoutMS=5000,
+    connectTimeoutMS=5000,
+    socketTimeoutMS=5000
+)
 db = client["sohum_db"]
 
 devotees = db["devotees"]
@@ -46,6 +82,19 @@ sessions = db["sessions"]   # 👈 ADD THIS LINE
 devotees.create_index("phone", unique=True)
 bookings.create_index("booking_id", unique=True)
 sessions.create_index("phone", unique=True)   # 👈 ADD THIS LINE
+
+# =====================================================
+# STARTUP VALIDATION
+# =====================================================
+
+@app.on_event("startup")
+async def startup_checks():
+    try:
+        client.admin.command("ping")
+        logger.info("MongoDB connection established successfully.")
+    except Exception as e:
+        logger.error(f"MongoDB connection failed during startup: {e}")
+        raise
 
 # =====================================================
 # RAZORPAY INIT
@@ -104,8 +153,18 @@ def send_main_menu(phone):
 # =====================================================
 
 @app.get("/")
-async def health():
+async def root():
     return {"status": "alive"}
+
+
+@app.get("/health")
+async def health_check():
+    try:
+        client.admin.command("ping")
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "unhealthy", "database": "disconnected"}
 
 # =====================================================
 # DEPENDENCY INJECTION INTO ROUTER
