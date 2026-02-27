@@ -16,25 +16,25 @@ logger = logging.getLogger("TempleBot")
 # These will be injected from main.py
 VERIFY_TOKEN = None
 devotees = None
+sessions = None
 send_main_menu = None
 send_language_selection = None
-language_sessions = None
 
 
 def init_dependencies(
     verify_token,
     devotees_collection,
+    sessions_collection,
     send_main_menu_func,
-    send_language_selection_func,
-    language_sessions_dict
+    send_language_selection_func
 ):
-    global VERIFY_TOKEN, devotees, send_main_menu, send_language_selection, language_sessions
+    global VERIFY_TOKEN, devotees, sessions, send_main_menu, send_language_selection
 
     VERIFY_TOKEN = verify_token
     devotees = devotees_collection
+    sessions = sessions_collection
     send_main_menu = send_main_menu_func
     send_language_selection = send_language_selection_func
-    language_sessions = language_sessions_dict
 
 
 # ===============================
@@ -113,12 +113,14 @@ def handle_text(sender, text):
 def handle_navigation(phone, selected):
 
     if selected == "lang_en":
-        language_sessions[phone] = "en"
+        from app.services.session_service import set_language
+        set_language(phone, "en", sessions)
         send_main_menu(phone)
         return {"status": "lang_en"}
 
     if selected == "lang_tel":
-        language_sessions[phone] = "tel"
+        from app.services.session_service import set_language
+        set_language(phone, "tel", sessions)
         send_main_menu(phone)
         return {"status": "lang_tel"}
 
@@ -152,7 +154,8 @@ def handle_navigation(phone, selected):
         return start_registration(phone, devotees, send_main_menu)
 
     if selected == "history":
-        lang = language_sessions.get(phone, "en")
+        from app.services.session_service import get_language
+        lang = get_language(phone, sessions)
 
         from app.services.whatsapp_service import send_image
 
