@@ -12,6 +12,9 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+import hashlib
+from datetime import datetime, timedelta
+
 
 app = FastAPI()
 app.include_router(webhook_router)
@@ -60,6 +63,9 @@ MONGODB_URI = os.getenv("MONGODB_URI")
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET")
 
+DEV_ADMIN_PHONE = os.getenv("DEV_ADMIN_PHONE")
+DEV_ADMIN_KEY = os.getenv("DEV_ADMIN_KEY")
+
 if not all([VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, MONGODB_URI]):
     raise Exception("Missing required environment variables")
 
@@ -78,10 +84,21 @@ db = client["sohum_db"]
 devotees = db["devotees"]
 bookings = db["bookings"]
 sessions = db["sessions"]   # 👈 ADD THIS LINE
+processed_messages = db["processed_messages"]
+admin_users = db["admin_users"]
+admin_sessions = db["admin_sessions"]
+offerings = db["offerings"]
+membership_audit_logs = db["membership_audit_logs"]
 
 devotees.create_index("phone", unique=True)
 bookings.create_index("booking_id", unique=True)
 sessions.create_index("phone", unique=True)   # 👈 ADD THIS LINE
+processed_messages.create_index("message_id", unique=True)
+admin_users.create_index("phone", unique=True)
+admin_sessions.create_index("phone", unique=True)
+offerings.create_index("offering_id", unique=True)
+offerings.create_index("phone")
+membership_audit_logs.create_index([("phone", 1), ("timestamp", -1)])
 
 # =====================================================
 # STARTUP VALIDATION
@@ -92,6 +109,42 @@ async def startup_checks():
     try:
         client.admin.command("ping")
         logger.info("MongoDB connection established successfully.")
+
+        # ------------------------------------------
+        # AUTO-CREATE DEV ADMIN IF NOT EXISTS
+        # ------------------------------------------
+        if DEV_ADMIN_PHONE and DEV_ADMIN_KEY:
+            existing_dev_admin = admin_users.find_one({
+                "phone": DEV_ADMIN_PHONE,
+                "role": "dev_admin"
+            })
+
+            if not existing_dev_admin:
+                key_hash = hashlib.sha256(DEV_ADMIN_KEY.encode()).hexdigest()
+
+                admin_users.insert_one({
+                    "phone": DEV_ADMIN_PHONE,
+                    "name": "Dev Admin",
+                    "role": "dev_admin",
+                    "personal_key_hash": key_hash,
+                    "key_last_changed": datetime.utcnow(),
+                    "created_at": datetime.utcnow(),
+                    "active": True
+                })
+
+                logger.info("Dev admin auto-created successfully.")
+            else:
+                # Ensure correct role and active status
+                admin_users.update_one(
+                    {"phone": DEV_ADMIN_PHONE},
+                    {"$set": {
+                        "role": "dev_admin",
+                        "active": True
+                    }}
+                )
+                logger.info("Dev admin already exists. Role verified.")
+        else:
+            logger.warning("DEV_ADMIN_PHONE or DEV_ADMIN_KEY not set. Dev admin not auto-created.")
     except Exception as e:
         logger.error(f"MongoDB connection failed during startup: {e}")
         raise
@@ -125,10 +178,13 @@ def send_main_menu(phone):
     from app.services.session_service import get_language
     lang = get_language(phone, sessions)
 
+    header_en = "🛕 Sri Parvati Jadala Ramalingeshwara Swamy Temple\nCheruvugattu\n\nPlease choose an option:" 
+    header_tel = "🛕 శ్రీ పార్వతి జడల రామలింగేశ్వర స్వామి దేవస్థానం\nచెరువుగట్టు\n\nదయచేసి ఒక ఎంపికను ఎంచుకోండి:" 
+
     if lang == "tel":
         send_list(
             phone,
-            "ప్రధాన మెను:",
+            header_tel,
             [
                 {"id": "register", "title": "📝 భక్తుడు నమోదు"},
                 {"id": "history", "title": "📜 స్థలపురాణం"},
@@ -139,7 +195,7 @@ def send_main_menu(phone):
     else:
         send_list(
             phone,
-            "Main Menu:",
+            header_en,
             [
                 {"id": "register", "title": "📝 Register Devotee"},
                 {"id": "history", "title": "📜 History"},
@@ -174,6 +230,11 @@ init_dependencies(
     VERIFY_TOKEN,
     devotees,
     sessions,
+    processed_messages,
+    admin_users,
+    admin_sessions,
+    offerings,
+    membership_audit_logs,
     send_main_menu,
     send_language_selection
 )
