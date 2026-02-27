@@ -15,6 +15,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 import hashlib
 from datetime import datetime, timedelta
 
+print("MAIN FILE LOADED")
+
 
 app = FastAPI()
 app.include_router(webhook_router)
